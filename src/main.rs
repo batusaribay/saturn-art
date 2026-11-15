@@ -240,11 +240,9 @@ fn run(opts: Options) -> io::Result<()> {
         }
 
         let (cols, rows) = terminal::size()?;
-        let (cols, rows) = (cols as usize, rows as usize);
-        if cols == 0 || rows == 0 {
-            std::thread::sleep(Duration::from_millis(100));
-            continue;
-        }
+        // The renderer clamps to a minimum size; keep the indexing in sync.
+        let cols = (cols as usize).max(4);
+        let rows = (rows as usize).max(3);
 
         let hint_rows = if hint && rows >= 12 { 1 } else { 0 };
         let draw_rows = rows - hint_rows;
