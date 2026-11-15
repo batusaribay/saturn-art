@@ -244,9 +244,6 @@ fn run(opts: Options) -> io::Result<()> {
         let cols = (cols as usize).max(4);
         let rows = (rows as usize).max(3);
 
-        let hint_rows = if hint && rows >= 12 { 1 } else { 0 };
-        let draw_rows = rows - hint_rows;
-
         let p = Params {
             tilt: (opts.tilt_deg.to_radians() + 0.020 * (t * 0.11).sin()),
             spin: t * SPIN_RATE,
@@ -254,11 +251,11 @@ fn run(opts: Options) -> io::Result<()> {
             time: t,
             stars,
         };
-        let cells = scene::render(cols, draw_rows, &p);
+        let cells = scene::render(cols, rows, &p);
 
-        let mut s = String::with_capacity(cols * draw_rows * 8 + 64);
+        let mut s = String::with_capacity(cols * rows * 8 + 64);
         let mut last_rgb = (0u8, 0u8, 0u8);
-        for j in 0..draw_rows {
+        for j in 0..rows {
             if j == 0 {
                 s.push_str("\x1b[1;1H");
             } else {
@@ -279,7 +276,9 @@ fn run(opts: Options) -> io::Result<()> {
             }
         }
 
-        if hint_rows == 1 {
+        // Overlay the hint on the last row rather than sacrificing a row of
+        // the scene: the bottom of the frame is empty sky at normal tilts.
+        if hint {
             let _ = write!(s, "\x1b[{};1H\x1b[38;2;104;104;116m", rows);
             let mut text = String::from("saturn-art");
             if paused {
