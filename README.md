@@ -123,7 +123,7 @@ saturn-art --snapshot - --ascii --cols 100 --rows 40
 `--snapshot -` writes a PPM to stdout, or plain text with `--ascii`, which makes
 it usable from scripts and for wallpapers.
 
-## Installation
+## Install
 
 **Requirements:** Rust 1.85+, `git`, and a terminal with 24-bit color.
 
