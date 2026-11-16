@@ -27,9 +27,9 @@ mod scene;
 
 use scene::{Params, V3};
 
-const SPIN_RATE: f32 = 0.55; // radians / second, ~11 s per rotation
-                             // Default view: almost edge-on rings tipped up to the right, with the sun
-                             // nearly behind the camera so the globe stays bright and peachy.
+const SPIN_RATE: f32 = 0.22; // radians / second, ~29 s per rotation
+// Default view: almost edge-on rings tipped up to the right, with the sun
+// nearly behind the camera so the globe stays bright and peachy.
 const BASE_TILT_DEG: f32 = 2.5;
 const BASE_AZIMUTH_DEG: f32 = 10.0;
 const BASE_ROLL_DEG: f32 = 12.0;
@@ -221,10 +221,10 @@ KEYS
   h         hide hint       r       reset
 
 One perspective ray per character cell: a latitude/longitude atmosphere
-model (brown butterscotch belts, cream equatorial zone, gray polar hood),
-a 30-degree ring plane with C/B/A ring densities, the Cassini and Encke
-gaps, plus the planet's shadow on the rings and the rings' shadow on the
-planet. The camera slowly drifts and the planet turns once every 24 s.",
+model (peach-cream zones, tan belts, mauve-brown poles), a near edge-on ring
+plane with D/C/B/A ring densities and the Cassini and Encke gaps, plus the
+planet's shadow on the rings and the rings' shadow on the planet. The ring
+material orbits at Keplerian rates, and the globe turns once every ~29 s.",
         env!("CARGO_PKG_VERSION")
     );
 }

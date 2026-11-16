@@ -17,7 +17,7 @@
 use std::f32::consts::PI;
 use std::sync::OnceLock;
 
-use crate::color::{from_hex, Rgb};
+use crate::color::{Rgb, from_hex};
 
 // ---------------------------------------------------------------------------
 // vectors
@@ -200,38 +200,51 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
 
             let mut acc = Rgb::ZERO;
             let mut covered = 0.0_f32;
+            let mut planet = 0.0_f32;
             for &(ox, oy) in sub {
                 let u = ((i as f32 + 0.5 + ox) / cols as f32 * 2.0 - 1.0) * half_w;
                 let v = (1.0 - (j as f32 + 0.5 + oy) / rows as f32 * 2.0) * tan_half;
 
                 let dir = fwd.add(right.mul(u)).add(up.mul(v)).norm();
 
-                let (c, cov) = shade_ray(cam, dir, p.spin, sun, p.time, bg);
+                let (c, cov, on_planet) = shade_ray(cam, dir, p.spin, sun, p.time, bg);
                 acc = acc.add(c);
                 covered += cov;
+                planet += if on_planet { 1.0 } else { 0.0 };
             }
 
             let mut col = acc.mul(inv);
             covered *= inv;
+            planet *= inv;
 
             // Thin sub-cell features (the rings at the ansae) would otherwise
             // average away into the background.  Recover some of their
             // brightness so they still render as glyphs.
-            if covered > 0.04 && covered < 1.0 {
-                let boost = (1.0 / covered).powf(0.40).min(1.85);
+            if covered > 0.03 && covered < 1.0 {
+                let boost = (1.0 / covered).powf(0.50).min(2.6);
                 col = col.mul(boost);
             }
 
+            // Keep the globe solid: a cell that is mostly planet must never
+            // become a blank hole, even on the shadowed limb.
+            if planet > 0.55 && col.luma() < 0.012 {
+                col = Rgb::new(0.05, 0.055, 0.075);
+            }
             let (r, g, b) = col.to_srgb8();
             let is_star = bg.luma() > 0.0 && covered < 0.4;
             let ch = if is_star {
-                if (r as u32 + g as u32 + b as u32) > 270 {
+                if (r as u32 + g as u32 + b as u32) > 520 {
                     b'+'
                 } else {
                     b'.'
                 }
             } else {
-                glyph(r, g, b)
+                let g = glyph(r, g, b);
+                if g == b' ' && (planet > 0.55 || covered > 0.18) {
+                    b'.'
+                } else {
+                    g
+                }
             };
 
             cells[j * cols + i] = Cell { ch, r, g, b };
@@ -244,7 +257,7 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
 /// Trace one ray, compositing what it hits over the background `bg`.
 /// Also returns how much of the ray was covered by Saturn (0..1).
 #[inline]
-fn shade_ray(o: V3, dir: V3, spin: f32, sun: V3, time: f32, bg: Rgb) -> (Rgb, f32) {
+fn shade_ray(o: V3, dir: V3, spin: f32, sun: V3, time: f32, bg: Rgb) -> (Rgb, f32, bool) {
     let sphere = sphere_hit(o, dir);
     let ring = ring_hit(o, dir, sun, time);
 
@@ -257,11 +270,11 @@ fn shade_ray(o: V3, dir: V3, spin: f32, sun: V3, time: f32, bg: Rgb) -> (Rgb, f3
                 Some((t_r, alpha, rc)) if t_r < t_s => surface.over(rc, alpha),
                 _ => surface,
             };
-            (col, 1.0)
+            (col, 1.0, true)
         }
         None => match ring {
-            Some((_, alpha, rc)) => (bg.over(rc, alpha), alpha),
-            None => (bg, 0.0),
+            Some((_, alpha, rc)) => (bg.over(rc, alpha), alpha, false),
+            None => (bg, 0.0, false),
         },
     }
 }
@@ -331,7 +344,7 @@ fn ring_hit(o: V3, d: V3, sun: V3, time: f32) -> Option<(f32, f32, Rgb)> {
     // Ring particles orbit at Keplerian rates: the inner rings sweep faster
     // than the outer ones, so the brightness pattern shears around the disc.
     let ang = q.z.atan2(q.x);
-    let omega = 0.85 * (1.55 / radius).powf(1.5);
+    let omega = 0.38 * (1.55 / radius).powf(1.5);
     let phase = ang + omega * time;
     // A large-scale brightness asymmetry (plus a finer ripple) makes the
     // ring's rotation readable even when the disc is nearly edge-on.
@@ -400,9 +413,11 @@ fn shade_planet(p: V3, d: V3, spin: f32, sun: V3) -> Rgb {
     let lambert = 0.34 + 0.66 * ndl.max(0.0);
     let mut light = (0.020 + 0.980 * diff) * lambert * 0.94;
 
-    // Rings throw a shadow band onto the planet.
+    // Rings throw a shadow band onto the planet.  Near an equinox the band is
+    // thinner than a character cell, so fade it out rather than let it dither
+    // into stray dots.
     let shadow = ring_shadow_on_planet(p, sun);
-    light *= 1.0 - 0.72 * shadow;
+    light *= 1.0 - 0.72 * shadow * smoothstep(0.03, 0.16, sun.y.abs());
 
     // Limb darkening + a pale atmospheric rim on the sunlit edge.
     let ndv = n.dot(d.mul(-1.0)).max(0.0);
@@ -656,19 +671,21 @@ fn gauss(x: f32, center: f32, width: f32) -> f32 {
 
 fn star(col: usize, row: usize, time: f32) -> Rgb {
     let h = hash2(col as u32, row as u32);
-    // roughly 4 in 1000 cells hold a star
-    if h % 1000 >= 4 {
+    // roughly 18 in 1000 cells hold a star
+    if h % 1000 >= 14 {
         return Rgb::ZERO;
     }
     let h2 = hash2(col as u32 ^ 0x9e37, row as u32 ^ 0x85eb);
     let phase = (h2 & 0xff) as f32 / 255.0 * PI * 2.0;
-    let twinkle = 0.62 + 0.38 * (time * 1.7 + phase).sin();
-    let base = 0.10 + 0.16 * ((h2 >> 8) & 0xff) as f32 / 255.0;
+    let twinkle = 0.70 + 0.30 * (time * 1.7 + phase).sin();
+    // Keep every star clearly brighter than the sky so none reads as a
+    // black speck on a dark terminal theme.
+    let base = 0.34 + 0.42 * ((h2 >> 8) & 0xff) as f32 / 255.0;
     let warm = (h2 >> 16) & 3 == 0;
     let c = if warm {
-        Rgb::new(0.52, 0.44, 0.34)
+        Rgb::new(0.62, 0.52, 0.40)
     } else {
-        Rgb::new(0.38, 0.48, 0.60)
+        Rgb::new(0.44, 0.55, 0.70)
     };
     c.mul(base * twinkle * 1.6)
 }

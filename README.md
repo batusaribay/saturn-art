@@ -1,140 +1,153 @@
 # saturn-art
 
-A live, realistic **Saturn** spinning in your terminal — in colored ASCII art.
+A live, ray-traced Saturn spinning in colored ASCII art
 
-Every character is a ray traced through a 3D model of the planet, its
-atmosphere and its rings, shaded in linear light and then quantized to a
-character ramp. No sprites, no pre-baked frames: it renders in real time.
+![saturn-art in a terminal](preview.png)
 
-![saturn-art preview](preview.png)
+## What it is
 
-## Install
+A single Rust binary that renders Saturn in the terminal in real time. Every
+character is a ray cast through a 3D model of the planet, its atmosphere, and
+its rings, shaded in linear light and quantized to a character ramp. There are
+no sprites and no pre-rendered frames: the ring shadow, the terminator, and the
+perspective stay consistent while the globe turns.
 
-Requires Rust and a terminal with 24-bit color (`TERM=xterm-256color` is fine).
+It runs in the terminal you already have, needs no assets, and works over SSH.
+Point it at the sky and leave it running.
 
-```sh
-cd saturn-art
-make install          # builds release and installs to ~/.local/bin
-saturn-art
-```
+## Why this exists
 
-or, without make:
+Terminal art is usually either a static ASCII drawing or a loop of pre-made
+frames. Saturn is a good argument for doing the real thing instead: the rings
+are a thin sheet seen almost edge-on, so their shadow, their near/far
+perspective, and the planet's shadow on them all depend on where the sun and
+the camera are. Animating that by hand is a geometry problem, not an art
+problem. Casting a ray per cell solves it once and then lets you move the
+camera, change the ring opening, or watch a storm rotate without any new art.
 
-```sh
-cargo build --release
-install -Dm755 target/release/saturn-art ~/.local/bin/saturn-art
-```
+## How it works
 
-## Run
+1. The camera is a real perspective camera on an angled orbit. It is placed
+   just 2.5 degrees above the ring plane, so the rings read as a thin bright
+   blade tipped up to the right, and the near ansa is noticeably larger than
+   the far one.
+2. Each character cell casts four to nine rays, depending on the terminal
+   size, and composites what they hit. This is what keeps the rings from
+   flickering and dropping out at the ansae.
+3. The planet is one ray/sphere intersection. Its surface is looked up in
+   latitude and longitude against a 27-stop palette sampled from real Saturn
+   images: peach-cream equatorial zone, tan belts, mauve-brown polar regions.
+   Fine ribbons, convective swirls, meandering jet edges, white storm ovals,
+   and dark barges are layered on top and rotate with the planet.
+4. Shading is done in linear RGB: a directional sun, soft terminator, limb
+   darkening, a thin atmospheric rim, a little cool ringshine so the night side
+   keeps its silhouette, and a warm glow where the rings face the equator.
+5. The rings are a ray/plane hit against a radial density profile with the
+   D, C, B, and A rings, the Cassini Division, the Encke Gap, and extra
+   ringlets. Opacity is composited, so the planet shows through the C ring.
+6. Shadows are geometric, not painted. The planet casts a real umbra across the
+   ring sheet, and the ring sheet casts a curved shadow band on the globe.
+7. The ring material orbits: an angular density pattern rotates at Keplerian
+   rates, faster inside than outside, with a large-scale brightness asymmetry
+   and two dark spokes that sweep around the disc.
+8. The result is converted to sRGB and mapped by luminance onto
+   `" .:-=+*#%@"`, with 24-bit color per cell. A hash-based star field twinkles
+   behind everything.
+9. A small footer line lists the keys on the last row, over empty sky, so the
+   scene keeps the whole terminal.
 
-```sh
-saturn-art
-```
+## Usage
 
-It uses the whole terminal. Bigger terminals show more detail; 80×24 works,
-140×50 is lovely, 240×70 is show-off territory.
+### Views
 
-| key       | action             |
-|-----------|--------------------|
-| `q`/`Esc` | quit               |
-| `space`   | pause              |
-| `+`/`-`   | speed up / slow down |
-| `s`       | toggle star field  |
-| `h`       | hide hint line     |
-| `r`       | reset time/speed   |
+| View | Look |
+| --- | --- |
+| `saturn-art` | Near edge-on rings tipped up to the right (default). |
+| `saturn-art --view classic` | Straight-on postcard, rings open, no roll. |
+| `saturn-art --view dramatic` | Angled and rolled, near rings larger. |
+| `saturn-art --view closeup` | Low camera, strong perspective, rings wrap the globe. |
 
-Views (camera compositions):
+### Keys
 
-| preset     | look |
-|------------|------|
-| `classic`  | straight-on postcard, rings open, no roll |
-| `dramatic` | angled and rolled, near rings larger |
-| `closeup`  | low camera, strong perspective, rings wrap the globe |
-| `edge`     | near edge-on rings tipped up to the right (default) |
+| Key | Action |
+| --- | --- |
+| `q` / `Esc` | Quit. |
+| `space` | Pause. |
+| `+` / `-` | Speed up / slow down. |
+| `s` | Toggle the star field. |
+| `h` | Hide or show the footer. |
+| `r` | Reset time and speed. |
 
-```sh
-saturn-art --view classic
-saturn-art --view edge
-```
+### Options
 
-Options:
-
-```
+```text
 --view NAME      edge | classic | dramatic | closeup
---fps N          frame rate, 5..120     (30)
---speed X        time multiplier        (1.0)
---tilt DEG       camera elevation       (2.5)
---azimuth DEG    camera angle around    (10)
---roll DEG       camera roll            (12)
---dist R         camera distance        (6.5, smaller = more perspective)
+--fps N          animation frame rate, 5..120       (30)
+--speed X        time multiplier                    (1.0)
+--tilt DEG       camera elevation, -85..85 deg      (2.5)
+--azimuth DEG    camera angle around the planet     (10)
+--roll DEG       camera roll around its axis        (12)
+--dist R         camera distance in planet radii    (6.5)
 --no-stars       no star field
+--snapshot PATH  render a single frame and exit
+--cols N         frame width  for --snapshot        (160)
+--rows N         frame height for --snapshot        (50)
+--time SECS      scene time for --snapshot          (0)
+--ascii          with --snapshot -, print plain text
 ```
 
-Snapshot mode (handy for wallpapers or checking a Terminal theme):
+### Examples
 
-```sh
+```bash
+saturn-art
+saturn-art --view classic
+saturn-art --view closeup --speed 1.5
+
+saturn-art --tilt 1.2          # even more edge-on
+saturn-art --roll 18           # steeper diagonal
+saturn-art --dist 4            # stronger perspective
+
 saturn-art --snapshot saturn.ppm --cols 240 --rows 70 --time 6
-saturn-art --snapshot - --ascii --cols 100 --rows 40   # plain text frame
-saturn-art --snapshot - > saturn.ppm                    # PPM on stdout
+saturn-art --snapshot - --ascii --cols 100 --rows 40
 ```
 
-## What is actually being rendered
+`--snapshot -` writes a PPM to stdout, or plain text with `--ascii`, which makes
+it usable from scripts and for wallpapers.
 
-* **Camera** — a real perspective camera (6.5 planet radii away), almost
-  edge-on: 2.5° above the ring plane, 10° azimuth, tipped up to the right by
-  a 12° roll, with the sun nearly behind the camera. The rings read as a
-  thin bright blade across the globe and show their near/far asymmetry. It
-  slowly drifts, and the whole ring system is auto-framed with a margin.
-* **Planet** — one ray/sphere intersection per sample. The texture is
-  looked up in latitude/longitude, with a 27-stop palette of Saturn's warm
-  brown-butterscotch tones: a cream equatorial zone, tan belts, olive-gray
-  temperate bands and a gray polar hood. On top of that live fine ribbons,
-  convective swirls, meandering jet edges, storm ovals (including a Great
-  White Spot) and dark barges, all of which rotate with the planet.
-* **Lighting** — a directional sun, Lambert shading with a softened
-  terminator, limb darkening and a thin atmospheric rim, all in linear RGB
-  and converted to sRGB for the terminal.
-* **Rings** — a ray/plane hit against a radial density profile with the
-  D, C, B and A rings, the Cassini Division, the Encke Gap and extra
-  ringlets. Opacity is composited (you can see the planet through the C
-  ring), and the sheet is lit by the sun. The ring material orbits at
-  Keplerian rates — the inner rings sweep faster than the outer ones — with
-  a rotating brightness asymmetry and two dark spokes, so the wings visibly
-  turn along with the planet.
-* **Shadows** — the planet casts a real umbra on the rings (and on the far
-  side of the ring sheet), and the rings cast a curved shadow band across
-  the planet.
-* **ASCII** — each cell is 2×2 supersampled, composited, converted to sRGB
-  and mapped by luminance onto `" .:-=+*#%@"`, with 24-bit color per cell.
-  A hash-based star field twinkles faintly behind everything, and the camera
-  drifts just enough to keep the view breathing. A little cool dusk light
-  (ringshine) keeps the night side readable so the sphere keeps its shape,
-  and the rings throw a soft glow onto the equator.
+## Installation
 
-## Tweaking
+**Requirements:** Rust 1.85+, `git`, and a terminal with 24-bit color.
 
-All the knobs are cheap to change:
-
-* `src/scene.rs` — `BANDS_HEX` (planet palette), `RINGS_HEX` (ring bands),
-  `SPIN` texture terms, `ring_sample`, and the shading constants.
-* `src/main.rs` — `SPIN_RATE` (default: one rotation per ~11 s),
-  `BASE_TILT_DEG`, `BASE_AZIMUTH_DEG`, `CAMERA_DISTANCE` and `SUN`
-  (direction of the sun).
-
-## Tests
-
-```sh
-cargo test --release
+```bash
+cargo install --git https://github.com/batusaribay/saturn-art.git --locked
 ```
 
-Covers render sizing, the ring density profile (B ring dense, Cassini empty),
-ray/sphere hits, shadow geometry and the glyph ramp.
+For a local build:
+
+```bash
+git clone https://github.com/batusaribay/saturn-art.git
+cd saturn-art
+make install    # or: cargo build --release
+```
+
+## Uninstall
+
+```bash
+cargo uninstall saturn-art
+```
 
 ## Notes
 
-Saturn's rings are 2.27 planet radii wide but only tens of meters thick; in
-this render they are a zero-thickness sheet, which is why the ansae get thin.
-The planet's rotation speed, camera angle, perspective strength and the
-sun's position are all configurable above.
+- The default spin is about 29 seconds per rotation. Saturn really takes 10.7
+  hours; this is a screen-saver pace with the same direction and differential
+  ring motion. `--speed` goes from 0.05x to 8x.
+- Ring thickness is a physical lie: the real rings are tens of meters thick.
+  They are drawn as a zero-thickness sheet, which is why the ansae get thin.
+- Rendering scales with the terminal. A 140x45 terminal is comfortable at
+  30 fps; very large terminals automatically drop to fewer samples per cell.
+- The scene assumes a dark terminal background. In a light theme it still
+  works, but the sky will not be black.
 
-Rendered with Rust, `crossterm`, and far too much trigonometry.
+## License
+
+This project is licensed under the [MIT License](LICENSE).
