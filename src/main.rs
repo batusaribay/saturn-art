@@ -312,22 +312,26 @@ struct Cam {
     t_roll: f32,
     next: f32,
     base_az: f32,
-    base_roll: f32,
 }
 
 impl Cam {
     fn new(opts: &Options, rng: &mut Rng) -> Self {
+        // Begin somewhere random inside the allowed range, so the very first
+        // frame of every run is different.  The roll may be either sign: the
+        // rings can tip up-left as well as up-right.
         let mut c = Self {
-            tilt: opts.tilt_deg,
-            az: opts.azimuth_deg,
-            roll: opts.roll_deg,
-            t_tilt: opts.tilt_deg,
-            t_az: opts.azimuth_deg,
-            t_roll: opts.roll_deg,
+            tilt: rng.range(8.0, 26.0),
+            az: opts.azimuth_deg + rng.range(-36.0, 36.0),
+            roll: rng.range(-30.0, 30.0),
+            t_tilt: 0.0,
+            t_az: 0.0,
+            t_roll: 0.0,
             next: 0.0,
             base_az: opts.azimuth_deg,
-            base_roll: opts.roll_deg,
         };
+        c.t_tilt = c.tilt;
+        c.t_az = c.az;
+        c.t_roll = c.roll;
         c.repick(rng, 0.0);
         c
     }
@@ -336,8 +340,7 @@ impl Cam {
         // Keep the phase around the sun and the roll moderate, whichever
         // shot is chosen.
         self.t_az = self.base_az + rng.range(-36.0, 36.0);
-        self.t_roll =
-            (self.roll + rng.range(-9.0, 9.0)).clamp(self.base_roll - 14.0, self.base_roll + 14.0);
+        self.t_roll = (self.roll + rng.range(-12.0, 12.0)).clamp(-32.0, 32.0);
 
         self.t_tilt = (self.tilt + rng.range(-6.0, 6.0)).clamp(8.0, 26.0);
         self.next = now + rng.range(5.0, 10.0);
