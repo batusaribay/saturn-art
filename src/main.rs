@@ -316,6 +316,8 @@ struct Cam {
     zoom: f32,
     t_zoom: f32,
     next: f32,
+    base_az: f32,
+    base_roll: f32,
 }
 
 impl Cam {
@@ -332,18 +334,24 @@ impl Cam {
             zoom: 1.0,
             t_zoom: 1.0,
             next: 0.0,
+            base_az: opts.azimuth_deg,
+            base_roll: opts.roll_deg,
         };
         c.repick(rng, 0.0);
         c
     }
 
     fn repick(&mut self, rng: &mut Rng, now: f32) {
-        self.t_tilt = (self.tilt + rng.range(-14.0, 14.0)).clamp(3.0, 27.0);
-        self.t_az = self.az + rng.range(-100.0, 100.0);
-        self.t_roll = (self.roll + rng.range(-20.0, 20.0)).clamp(-30.0, 45.0);
-        self.t_dist = (self.dist + rng.range(-1.4, 1.4)).clamp(4.6, 8.6);
-        self.t_zoom = (self.zoom + rng.range(-0.16, 0.16)).clamp(0.86, 1.18);
-        self.next = now + rng.range(4.0, 9.0);
+        // Stay inside poses that actually flatter Saturn: rings at least a
+        // little open, the phase not so far around that the globe is a
+        // crescent, and a moderate roll and zoom.
+        self.t_tilt = (self.tilt + rng.range(-6.0, 6.0)).clamp(8.0, 26.0);
+        self.t_az = self.base_az + rng.range(-36.0, 36.0);
+        self.t_roll =
+            (self.roll + rng.range(-9.0, 9.0)).clamp(self.base_roll - 14.0, self.base_roll + 14.0);
+        self.t_dist = (self.dist + rng.range(-0.8, 0.8)).clamp(5.6, 7.6);
+        self.t_zoom = (self.zoom + rng.range(-0.08, 0.08)).clamp(0.90, 1.12);
+        self.next = now + rng.range(5.0, 10.0);
     }
 
     fn advance(&mut self, rng: &mut Rng, t: f32, dt: f32) {
