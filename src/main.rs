@@ -27,12 +27,14 @@ mod scene;
 
 use scene::{Params, V3};
 
-const SPIN_RATE: f32 = 0.60; // radians / second, ~11 s per rotation
-const BASE_TILT_DEG: f32 = 27.0;
-const BASE_AZIMUTH_DEG: f32 = 26.0;
-const BASE_ROLL_DEG: f32 = -14.0;
-const CAMERA_DISTANCE: f32 = 6.0;
-const SUN: V3 = V3::new(-0.48, 0.44, -0.76);
+const SPIN_RATE: f32 = 0.55; // radians / second, ~11 s per rotation
+                             // Default view: almost edge-on rings tipped up to the right, with the sun
+                             // nearly behind the camera so the globe stays bright and peachy.
+const BASE_TILT_DEG: f32 = 2.5;
+const BASE_AZIMUTH_DEG: f32 = 10.0;
+const BASE_ROLL_DEG: f32 = 12.0;
+const CAMERA_DISTANCE: f32 = 6.5;
+const SUN: V3 = V3::new(-0.18, 0.03, -0.983);
 
 // ---------------------------------------------------------------------------
 // options
@@ -45,6 +47,7 @@ struct Options {
     azimuth_deg: f32,
     roll_deg: f32,
     distance: f32,
+    sun: V3,
     stars: bool,
     snapshot: Option<String>,
     cols: usize,
@@ -62,6 +65,7 @@ impl Default for Options {
             azimuth_deg: BASE_AZIMUTH_DEG,
             roll_deg: BASE_ROLL_DEG,
             distance: CAMERA_DISTANCE,
+            sun: SUN,
             stars: true,
             snapshot: None,
             cols: 160,
@@ -121,6 +125,7 @@ fn parse_args() -> Result<Options, String> {
                         o.azimuth_deg = 0.0;
                         o.roll_deg = 0.0;
                         o.distance = 14.0;
+                        o.sun = V3::new(-0.45, 0.42, -0.79);
                     }
                     // rings sweeping diagonally across the frame
                     "dramatic" => {
@@ -128,6 +133,7 @@ fn parse_args() -> Result<Options, String> {
                         o.azimuth_deg = 26.0;
                         o.roll_deg = -14.0;
                         o.distance = 6.0;
+                        o.sun = V3::new(-0.48, 0.44, -0.76);
                     }
                     // low, close and deep
                     "closeup" => {
@@ -135,13 +141,15 @@ fn parse_args() -> Result<Options, String> {
                         o.azimuth_deg = 18.0;
                         o.roll_deg = -8.0;
                         o.distance = 3.9;
+                        o.sun = V3::new(-0.50, 0.40, -0.77);
                     }
-                    // almost edge-on rings slicing the globe
+                    // almost edge-on rings slicing the globe (default)
                     "edge" => {
-                        o.tilt_deg = 9.0;
-                        o.azimuth_deg = 8.0;
-                        o.roll_deg = 0.0;
-                        o.distance = 9.0;
+                        o.tilt_deg = BASE_TILT_DEG;
+                        o.azimuth_deg = BASE_AZIMUTH_DEG;
+                        o.roll_deg = BASE_ROLL_DEG;
+                        o.distance = CAMERA_DISTANCE;
+                        o.sun = SUN;
                     }
                     other => return Err(format!("unknown view: {other}")),
                 }
@@ -188,11 +196,11 @@ OPTIONS
   --fps N          animation frame rate, 5..120       (30)
   --speed X        time multiplier                    (1.0)
   --view NAME      classic | dramatic | closeup | edge
-  --tilt DEG       camera elevation, -85..85 deg      (27)
-  --azimuth DEG    camera angle around the planet     (26)
-  --roll DEG       camera roll around its axis        (-14)
+  --tilt DEG       camera elevation, -85..85 deg      (2.5)
+  --azimuth DEG    camera angle around the planet     (10)
+  --roll DEG       camera roll around its axis        (12)
                     (overrides the view preset if given after it)
-  --dist R         camera distance in planet radii    (6.0)
+  --dist R         camera distance in planet radii    (6.5)
                     (smaller = stronger perspective)
   --no-stars       no star field
   --snapshot PATH  render a single frame and exit
@@ -202,10 +210,10 @@ OPTIONS
   --ascii          with --snapshot -, print plain text
 
 VIEWS
+  edge       near edge-on rings, tipped up, bright globe  (default)
   classic    straight-on postcard, rings open, no roll
-  dramatic   angled/rolled 3D view, near rings larger  (default)
+  dramatic   angled/rolled 3D view, near rings larger
   closeup    low camera, strong perspective, rings wrap the globe
-  edge       rings nearly edge-on across the planet
 
 KEYS
   q / Esc   quit            space   pause
@@ -316,7 +324,7 @@ fn run(opts: Options) -> io::Result<()> {
             roll: opts.roll_deg.to_radians(),
             distance: opts.distance,
             spin: t * SPIN_RATE,
-            sun: SUN,
+            sun: opts.sun,
             time: t,
             stars,
         };
@@ -394,7 +402,7 @@ fn snapshot(opts: &Options) -> io::Result<()> {
         roll: opts.roll_deg.to_radians(),
         distance: opts.distance,
         spin: opts.time * SPIN_RATE,
-        sun: SUN,
+        sun: opts.sun,
         time: opts.time,
         stars: opts.stars,
     };

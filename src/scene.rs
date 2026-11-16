@@ -172,9 +172,23 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
 
     let mut cells = vec![Cell::default(); cols * rows];
 
-    // 2x2 supersampling: rings are only a cell or two thick at the ansae, so
-    // single-sample rays would make them flicker and drop out.
-    const SUB: [(f32, f32); 4] = [(-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)];
+    // Supersampling: rings are only a cell or two thick at this angle, so
+    // single-sample rays would make them flicker and drop out.  Big terminals
+    // drop to 2x2 to stay fast.
+    const SUB4: [(f32, f32); 4] = [(-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)];
+    const SUB9: [(f32, f32); 9] = [
+        (-0.333, -0.333),
+        (0.0, -0.333),
+        (0.333, -0.333),
+        (-0.333, 0.0),
+        (0.0, 0.0),
+        (0.333, 0.0),
+        (-0.333, 0.333),
+        (0.0, 0.333),
+        (0.333, 0.333),
+    ];
+    let sub: &[(f32, f32)] = if cols * rows <= 32_000 { &SUB9 } else { &SUB4 };
+    let inv = 1.0 / sub.len() as f32;
 
     for j in 0..rows {
         for i in 0..cols {
@@ -186,7 +200,7 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
 
             let mut acc = Rgb::ZERO;
             let mut covered = 0.0_f32;
-            for (ox, oy) in SUB {
+            for &(ox, oy) in sub {
                 let u = ((i as f32 + 0.5 + ox) / cols as f32 * 2.0 - 1.0) * half_w;
                 let v = (1.0 - (j as f32 + 0.5 + oy) / rows as f32 * 2.0) * tan_half;
 
@@ -197,8 +211,8 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
                 covered += cov;
             }
 
-            let mut col = acc.mul(0.25);
-            covered *= 0.25;
+            let mut col = acc.mul(inv);
+            covered *= inv;
 
             // Thin sub-cell features (the rings at the ansae) would otherwise
             // average away into the background.  Recover some of their
@@ -308,17 +322,28 @@ fn ring_hit(o: V3, d: V3, sun: V3, time: f32) -> Option<(f32, f32, Rgb)> {
     };
     let ndl = n.dot(sun).max(0.0);
     // Rings are thin and scatter light through, so there is a healthy floor.
-    let light = 0.60 + 0.96 * ndl;
+    let light = 0.96 + 0.40 * ndl;
 
     // The planet's shadow falls across the far side of the rings.  It is deep
     // but never pure black: scattered light still reaches the ring particles.
     let shadow = 1.0 - 0.62 * sphere_occlusion(q, sun);
 
-    // Slow density waves in the ring plane.
+    // Ring particles orbit at Keplerian rates: the inner rings sweep faster
+    // than the outer ones, so the brightness pattern shears around the disc.
     let ang = q.z.atan2(q.x);
-    let wave = 0.93 + 0.07 * (ang * 22.0 + radius * 26.0 - time * 0.55).sin();
+    let omega = 0.85 * (1.55 / radius).powf(1.5);
+    let phase = ang + omega * time;
+    // A large-scale brightness asymmetry (plus a finer ripple) makes the
+    // ring's rotation readable even when the disc is nearly edge-on.
+    let wave =
+        (0.86 + 0.26 * (phase + 0.3).sin() + 0.10 * (phase * 3.0 - 1.1).sin()).clamp(0.35, 1.25);
 
-    Some((t, alpha, tone.mul(light * shadow * wave)))
+    // Two dark spokes sweep around the ring plane, the way Voyager's did.
+    let spoke = 1.0
+        - 0.42 * (-(wrap_pi(phase) / 0.26).powi(2)).exp()
+        - 0.26 * (-(wrap_pi(phase + 2.4) / 0.17).powi(2)).exp();
+
+    Some((t, alpha, tone.mul(light * shadow * wave * spoke)))
 }
 
 /// Soft shadow of the planet: 1 = fully inside the umbra, 0 = lit.
@@ -392,8 +417,11 @@ fn shade_planet(p: V3, d: V3, spin: f32, sun: V3) -> Rgb {
     // what preserves the sphere's silhouette in ASCII.
     const DUSK: Rgb = Rgb::new(0.055, 0.060, 0.080);
 
+    // Ringshine: the ring sheet throws a soft warm glow onto the equator.
+    let ring_glow = (-(p.y / 0.16).powi(2)).exp() * 0.10;
+
     albedo
-        .mul(light * limb)
+        .mul(light * limb + ring_glow)
         .add(albedo.mul_rgb(DUSK))
         .add(Rgb::new(0.86, 0.79, 0.63).mul(rim))
 }
@@ -405,33 +433,33 @@ fn shade_planet(p: V3, d: V3, spin: f32, sun: V3) -> Rgb {
 /// Latitude (degrees) -> albedo, from the south pole (-90) to the north (90).
 /// Pale butterscotch belts, cream equatorial zone, bluish-gray polar hood.
 const BANDS_HEX: &[(f32, u32)] = &[
-    (-90.0, 0x5f5140),
-    (-82.0, 0x7c6a54),
-    (-74.0, 0x988262),
-    (-66.0, 0xb09872),
-    (-58.0, 0xc4ac82),
-    (-50.0, 0xaa8c5a),
-    (-42.0, 0xcdb183),
-    (-34.0, 0xd5bc8c),
-    (-27.0, 0xbb9c63),
-    (-20.0, 0xccb281),
-    (-13.0, 0xd9c193),
-    (-6.0, 0xe0cba0),
-    (1.0, 0xdec99c),
-    (8.0, 0xd2b98a),
-    (14.0, 0xbb985b),
-    (20.0, 0xc8ad7a),
-    (27.0, 0xd4bd8e),
-    (34.0, 0xc0a87c),
-    (41.0, 0xb0996b),
-    (48.0, 0xc8b184),
-    (55.0, 0xb8a37c),
-    (62.0, 0xc5b082),
-    (70.0, 0xb3a586),
-    (77.0, 0xc0b49a),
-    (83.0, 0xa8a795),
-    (88.0, 0x949a8c),
-    (90.0, 0x8d9387),
+    (-90.0, 0x7d6454),
+    (-82.0, 0x94745f),
+    (-74.0, 0xad8870),
+    (-66.0, 0xc49c80),
+    (-58.0, 0xd3ac8d),
+    (-50.0, 0xc29573),
+    (-42.0, 0xe6c29c),
+    (-34.0, 0xf0d2ac),
+    (-27.0, 0xd0a37e),
+    (-20.0, 0xe4bf98),
+    (-13.0, 0xf4dbb6),
+    (-6.0, 0xf7e4bf),
+    (1.0, 0xf9e9c6),
+    (8.0, 0xf5e0b9),
+    (14.0, 0xd2a67f),
+    (20.0, 0xe6c39b),
+    (27.0, 0xf3ddb8),
+    (34.0, 0xd4ab85),
+    (41.0, 0xc49a76),
+    (48.0, 0xe2c19d),
+    (55.0, 0xd8b592),
+    (62.0, 0xcfad8c),
+    (70.0, 0xc3a186),
+    (77.0, 0xb79884),
+    (83.0, 0xaa8f80),
+    (88.0, 0x9f897d),
+    (90.0, 0x99847a),
 ];
 
 fn band_table() -> &'static [(f32, Rgb)] {
@@ -540,19 +568,19 @@ struct RingSeg {
 
 const RINGS_HEX: &[(f32, f32, f32, u32)] = &[
     // D ring: faint, dusty
-    (1.105, 1.236, 0.180, 0x4e4638),
+    (1.105, 1.236, 0.090, 0x4a4338),
     // C ring: translucent, grayish tan
-    (1.236, 1.530, 0.64, 0x877f6d),
+    (1.236, 1.530, 0.40, 0xa89880),
     // B ring: the bright, dense one
-    (1.530, 1.952, 0.95, 0xd2c9b6),
+    (1.530, 1.952, 0.98, 0xe9d9b6),
     // Cassini Division
-    (1.952, 2.030, 0.045, 0x3f3a30),
+    (1.952, 2.030, 0.045, 0x38332c),
     // A ring
-    (2.030, 2.212, 0.80, 0xbfb6a3),
+    (2.030, 2.212, 0.86, 0xd8c7a6),
     // Encke Gap
-    (2.212, 2.227, 0.035, 0x3f3a30),
+    (2.212, 2.227, 0.035, 0x38332c),
     // outer A ring
-    (2.227, 2.272, 0.66, 0xb7ae9a),
+    (2.227, 2.272, 0.72, 0xcdbb9a),
 ];
 
 fn ring_table() -> &'static [RingSeg] {
@@ -597,23 +625,21 @@ fn ring_sample(r: f32) -> (f32, Rgb) {
     // Ripples: unresolved ringlets, density waves and a few narrow gaps.
     let mut a = alpha;
     if r > 1.24 && r < 1.53 {
-        // C ring: wispy, structured
-        a *= 0.62 + 0.38 * (0.5 + 0.5 * (r * 118.0).sin());
+        // C ring: a broad wispy subdivision
+        a *= 0.82 + 0.18 * (0.5 + 0.5 * (r * 12.0).sin());
     } else if r > 1.53 && r < 1.95 {
-        // B ring: dense with fine ringlets
-        a *= 0.93 + 0.07 * (r * 190.0).sin() * (r * 61.0).sin();
-        // a few darker subdivisions
-        a *= 1.0 - 0.22 * gauss(r, 1.642, 0.012) - 0.16 * gauss(r, 1.712, 0.009);
+        // B ring: dense, with a couple of broad subdivisions
+        a *= 0.98 + 0.02 * (r * 20.0).sin();
+        a *= 1.0 - 0.16 * gauss(r, 1.642, 0.030) - 0.12 * gauss(r, 1.712, 0.024);
     } else if r > 2.03 && r < 2.212 {
         // A ring: mostly uniform, one extra gap
-        a *= 1.0 - 0.55 * gauss(r, 2.102, 0.006);
-        a *= 0.95 + 0.05 * (r * 260.0).sin();
+        a *= 1.0 - 0.55 * gauss(r, 2.102, 0.010);
     } else if r > 2.227 && r < 2.272 {
-        a *= 0.90 + 0.10 * (r * 300.0).sin();
+        a *= 0.96 + 0.04 * (r * 30.0).sin();
     }
 
-    // Slight brightness variation across the ringlets.
-    let tone = tone.mul(0.94 + 0.06 * (r * 47.0).sin());
+    // Gentle brightness trend across the ringlets.
+    let tone = tone.mul(0.97 + 0.03 * (r * 15.0).sin());
 
     (a.clamp(0.0, 1.0), tone)
 }

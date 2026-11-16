@@ -48,9 +48,9 @@ Views (camera compositions):
 | preset     | look |
 |------------|------|
 | `classic`  | straight-on postcard, rings open, no roll |
-| `dramatic` | angled and rolled, near rings larger (default) |
+| `dramatic` | angled and rolled, near rings larger |
 | `closeup`  | low camera, strong perspective, rings wrap the globe |
-| `edge`     | rings nearly edge-on, slicing across the planet |
+| `edge`     | near edge-on rings tipped up to the right (default) |
 
 ```sh
 saturn-art --view classic
@@ -60,13 +60,13 @@ saturn-art --view edge
 Options:
 
 ```
---view NAME      classic | dramatic | closeup | edge
+--view NAME      edge | classic | dramatic | closeup
 --fps N          frame rate, 5..120     (30)
 --speed X        time multiplier        (1.0)
---tilt DEG       camera elevation       (27)
---azimuth DEG    camera angle around    (26)
---roll DEG       camera roll            (-14)
---dist R         camera distance        (6.0, smaller = more perspective)
+--tilt DEG       camera elevation       (2.5)
+--azimuth DEG    camera angle around    (10)
+--roll DEG       camera roll            (12)
+--dist R         camera distance        (6.5, smaller = more perspective)
 --no-stars       no star field
 ```
 
@@ -80,10 +80,11 @@ saturn-art --snapshot - > saturn.ppm                    # PPM on stdout
 
 ## What is actually being rendered
 
-* **Camera** — a real perspective camera (6 planet radii away) at a 27°
-  elevation, 26° azimuth and a -14° roll, so the rings cut diagonally and
-  show their near/far asymmetry instead of looking flat. It slowly drifts,
-  and the whole ring system is auto-framed with a margin.
+* **Camera** — a real perspective camera (6.5 planet radii away), almost
+  edge-on: 2.5° above the ring plane, 10° azimuth, tipped up to the right by
+  a 12° roll, with the sun nearly behind the camera. The rings read as a
+  thin bright blade across the globe and show their near/far asymmetry. It
+  slowly drifts, and the whole ring system is auto-framed with a margin.
 * **Planet** — one ray/sphere intersection per sample. The texture is
   looked up in latitude/longitude, with a 27-stop palette of Saturn's warm
   brown-butterscotch tones: a cream equatorial zone, tan belts, olive-gray
@@ -96,7 +97,10 @@ saturn-art --snapshot - > saturn.ppm                    # PPM on stdout
 * **Rings** — a ray/plane hit against a radial density profile with the
   D, C, B and A rings, the Cassini Division, the Encke Gap and extra
   ringlets. Opacity is composited (you can see the planet through the C
-  ring), the sheet is lit by the sun, and its density waves slowly orbit.
+  ring), and the sheet is lit by the sun. The ring material orbits at
+  Keplerian rates — the inner rings sweep faster than the outer ones — with
+  a rotating brightness asymmetry and two dark spokes, so the wings visibly
+  turn along with the planet.
 * **Shadows** — the planet casts a real umbra on the rings (and on the far
   side of the ring sheet), and the rings cast a curved shadow band across
   the planet.
@@ -104,7 +108,8 @@ saturn-art --snapshot - > saturn.ppm                    # PPM on stdout
   and mapped by luminance onto `" .:-=+*#%@"`, with 24-bit color per cell.
   A hash-based star field twinkles faintly behind everything, and the camera
   drifts just enough to keep the view breathing. A little cool dusk light
-  (ringshine) keeps the night side readable so the sphere keeps its shape.
+  (ringshine) keeps the night side readable so the sphere keeps its shape,
+  and the rings throw a soft glow onto the equator.
 
 ## Tweaking
 
@@ -112,7 +117,7 @@ All the knobs are cheap to change:
 
 * `src/scene.rs` — `BANDS_HEX` (planet palette), `RINGS_HEX` (ring bands),
   `SPIN` texture terms, `ring_sample`, and the shading constants.
-* `src/main.rs` — `SPIN_RATE` (default: one rotation per ~10 s),
+* `src/main.rs` — `SPIN_RATE` (default: one rotation per ~11 s),
   `BASE_TILT_DEG`, `BASE_AZIMUTH_DEG`, `CAMERA_DISTANCE` and `SUN`
   (direction of the sun).
 

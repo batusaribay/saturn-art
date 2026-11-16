@@ -1,6 +1,6 @@
 [package]
 name = "saturn-art"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A live, realistic Saturn spinning in colored ASCII art"
 license = "MIT"
