@@ -113,6 +113,39 @@ fn parse_args() -> Result<Options, String> {
                 o.azimuth_deg = next("--azimuth")?.parse().map_err(|_| "bad --azimuth")?;
                 o.azimuth_deg = o.azimuth_deg.clamp(-360.0, 360.0);
             }
+            "--view" => {
+                match next("--view")?.as_str() {
+                    // straight-on postcard
+                    "classic" => {
+                        o.tilt_deg = 24.0;
+                        o.azimuth_deg = 0.0;
+                        o.roll_deg = 0.0;
+                        o.distance = 14.0;
+                    }
+                    // rings sweeping diagonally across the frame
+                    "dramatic" => {
+                        o.tilt_deg = 27.0;
+                        o.azimuth_deg = 26.0;
+                        o.roll_deg = -14.0;
+                        o.distance = 6.0;
+                    }
+                    // low, close and deep
+                    "closeup" => {
+                        o.tilt_deg = 16.0;
+                        o.azimuth_deg = 18.0;
+                        o.roll_deg = -8.0;
+                        o.distance = 3.9;
+                    }
+                    // almost edge-on rings slicing the globe
+                    "edge" => {
+                        o.tilt_deg = 9.0;
+                        o.azimuth_deg = 8.0;
+                        o.roll_deg = 0.0;
+                        o.distance = 9.0;
+                    }
+                    other => return Err(format!("unknown view: {other}")),
+                }
+            }
             "--roll" => {
                 o.roll_deg = next("--roll")?.parse().map_err(|_| "bad --roll")?;
                 o.roll_deg = o.roll_deg.clamp(-180.0, 180.0);
@@ -154,9 +187,11 @@ USAGE
 OPTIONS
   --fps N          animation frame rate, 5..120       (30)
   --speed X        time multiplier                    (1.0)
+  --view NAME      classic | dramatic | closeup | edge
   --tilt DEG       camera elevation, -85..85 deg      (27)
   --azimuth DEG    camera angle around the planet     (26)
   --roll DEG       camera roll around its axis        (-14)
+                    (overrides the view preset if given after it)
   --dist R         camera distance in planet radii    (6.0)
                     (smaller = stronger perspective)
   --no-stars       no star field
@@ -165,6 +200,12 @@ OPTIONS
   --rows N         frame height for --snapshot        (50)
   --time SECS      scene time for --snapshot          (0)
   --ascii          with --snapshot -, print plain text
+
+VIEWS
+  classic    straight-on postcard, rings open, no roll
+  dramatic   angled/rolled 3D view, near rings larger  (default)
+  closeup    low camera, strong perspective, rings wrap the globe
+  edge       rings nearly edge-on across the planet
 
 KEYS
   q / Esc   quit            space   pause

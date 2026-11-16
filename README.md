@@ -43,9 +43,24 @@ It uses the whole terminal. Bigger terminals show more detail; 80×24 works,
 | `h`       | hide hint line     |
 | `r`       | reset time/speed   |
 
+Views (camera compositions):
+
+| preset     | look |
+|------------|------|
+| `classic`  | straight-on postcard, rings open, no roll |
+| `dramatic` | angled and rolled, near rings larger (default) |
+| `closeup`  | low camera, strong perspective, rings wrap the globe |
+| `edge`     | rings nearly edge-on, slicing across the planet |
+
+```sh
+saturn-art --view classic
+saturn-art --view edge
+```
+
 Options:
 
 ```
+--view NAME      classic | dramatic | closeup | edge
 --fps N          frame rate, 5..120     (30)
 --speed X        time multiplier        (1.0)
 --tilt DEG       camera elevation       (27)
