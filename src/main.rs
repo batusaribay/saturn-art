@@ -11,8 +11,8 @@
 //! * `q` / `Esc` quit
 //! * `space` pause
 //! * `+` / `-` speed up / slow down
+//! * `c` cycle the glyph ramp
 //! * `s` toggle stars
-//! * `h` hide/show the hint line
 //! * `r` reset
 
 use std::fmt::Write as _;
@@ -168,7 +168,7 @@ fn parse_args() -> Result<Options, String> {
             }
             "--zoom" => {
                 o.zoom = next("--zoom")?.parse().map_err(|_| "bad --zoom")?;
-                o.zoom = o.zoom.clamp(0.5, 1.5);
+                o.zoom = o.zoom.clamp(0.5, 3.0);
             }
             "--charset" => {
                 let v = next("--charset")?;
@@ -219,7 +219,7 @@ Options
   --azimuth DEG    camera angle around the planet     (10)
   --roll DEG       camera roll around its axis        (12)
   --dist R         camera distance in planet radii    (6.5)
-  --zoom X         framing zoom, 0.5..1.5             (1.0)
+  --zoom X         framing zoom, 0.5..3.0             (1.0)
   --no-stars       no star field
   --snapshot PATH  render a single frame and exit
   --cols N         frame width  for --snapshot        (160)
@@ -239,8 +239,7 @@ Charsets
 Keys
   q / Esc   quit            space   pause
   + / -     speed           c       cycle charset
-  s         stars           h       hide footer
-  r         reset"
+  s         stars           r       reset"
     );
 }
 
@@ -342,15 +341,23 @@ impl Cam {
     }
 
     fn repick(&mut self, rng: &mut Rng, now: f32) {
-        // Stay inside poses that actually flatter Saturn: rings at least a
-        // little open, the phase not so far around that the globe is a
-        // crescent, and a moderate roll and zoom.
-        self.t_tilt = (self.tilt + rng.range(-6.0, 6.0)).clamp(8.0, 26.0);
+        // Keep the phase around the sun and the roll moderate, whichever
+        // shot is chosen.
         self.t_az = self.base_az + rng.range(-36.0, 36.0);
         self.t_roll =
             (self.roll + rng.range(-9.0, 9.0)).clamp(self.base_roll - 14.0, self.base_roll + 14.0);
-        self.t_dist = (self.dist + rng.range(-0.8, 0.8)).clamp(5.6, 7.6);
-        self.t_zoom = (self.zoom + rng.range(-0.08, 0.08)).clamp(0.90, 1.12);
+
+        if rng.unit() < 0.30 {
+            // Cinematic close-up: the globe fills the frame and the rings
+            // run off the edges.
+            self.t_tilt = rng.range(14.0, 24.0);
+            self.t_dist = rng.range(5.2, 6.6);
+            self.t_zoom = rng.range(1.6, 2.5);
+        } else {
+            self.t_tilt = (self.tilt + rng.range(-6.0, 6.0)).clamp(8.0, 26.0);
+            self.t_dist = (self.dist + rng.range(-0.8, 0.8)).clamp(5.6, 7.6);
+            self.t_zoom = (self.zoom + rng.range(-0.08, 0.08)).clamp(0.90, 1.12);
+        }
         self.next = now + rng.range(5.0, 10.0);
     }
 
@@ -380,7 +387,6 @@ fn run(opts: Options) -> io::Result<()> {
     let mut speed = opts.speed;
     let mut paused = false;
     let mut stars = opts.stars;
-    let mut hint = true;
     let mut charset = opts.charset;
     let mut status: Option<(String, f32)> = None;
     let mut dims = (0usize, 0usize);
@@ -429,7 +435,6 @@ fn run(opts: Options) -> io::Result<()> {
                     stars = !stars;
                     status = Some((format!("stars: {}", if stars { "on" } else { "off" }), 2.5));
                 }
-                KeyCode::Char('h') | KeyCode::Char('H') => hint = !hint,
                 KeyCode::Char('r') | KeyCode::Char('R') => {
                     t = 0.0;
                     speed = opts.speed;
@@ -502,8 +507,6 @@ fn run(opts: Options) -> io::Result<()> {
             }
         }
 
-        // Overlay the hint on the last row rather than sacrificing a row of
-        // the scene: the bottom of the frame is empty sky at normal tilts.
         if let Some((_, left)) = &mut status {
             *left -= dt;
             if *left <= 0.0 {
@@ -511,19 +514,13 @@ fn run(opts: Options) -> io::Result<()> {
             }
         }
 
-        if hint {
-            let _ = write!(s, "\x1b[{};1H\x1b[38;2;104;104;116m", rows);
-            let mut text = String::from("saturn-art");
+        // No permanent footer: only a brief message when a key changes
+        // something, drawn over the last row of sky.
+        if let Some((msg, _)) = &status {
+            let _ = write!(s, "\x1b[{};1H\x1b[38;2;120;120;132m", rows);
+            let mut text = String::from(msg);
             if paused {
                 text.push_str("   paused");
-            }
-            match &status {
-                Some((msg, _)) => {
-                    text.push_str("   ");
-                    text.push_str(msg);
-                }
-                None => text
-                    .push_str("   q quit   space pause   +/- speed   c charset   s stars   h hide"),
             }
             let mut used = 0usize;
             for ch in text.chars() {

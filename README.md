@@ -34,7 +34,8 @@ camera, change the ring opening, or watch a storm rotate without any new art.
    than the far one. It wanders: every few seconds it picks a new nearby pose
    and eases into it — ring opening, orbit angle, roll, distance and a framing
    zoom, each within its own range — so the shot never repeats and every run
-   takes a different path. Glyph hysteresis and temporal smoothing only cross
+   takes a different path. A little over a third of the shots are cinematic
+   close-ups where the globe fills the frame and the rings run off the edges. Glyph hysteresis and temporal smoothing only cross
    two solid cells, so moving edges leave no ghosts and the razor-thin rings
    do not strobe.
 2. Each character cell casts four to nine rays, depending on the terminal
@@ -60,8 +61,9 @@ camera, change the ring opening, or watch a storm rotate without any new art.
    with 24-bit color per cell. Eight ramps are built in — classic, detailed,
    soft, blocks, dense, dots, minimal and mixed — and `c` cycles them live.
    A hash-based star field twinkles behind everything.
-9. A small footer line lists the keys on the last row, over empty sky, so the
-   scene keeps the whole terminal.
+9. There is no permanent overlay. A key press reports itself briefly on the
+   last row (charset, speed, pause) and then fades, so the scene keeps the
+   whole terminal.
 
 ## Usage
 
@@ -83,7 +85,6 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 | `+` / `-` | Speed up / slow down. |
 | `c` | Cycle the glyph ramp. |
 | `s` | Toggle the star field. |
-| `h` | Hide or show the footer. |
 | `r` | Reset time and speed. |
 
 ### Options
@@ -93,10 +94,11 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 --charset NAME   glyph ramp                         (classic)
 --fps N          animation frame rate, 5..120       (30)
 --speed X        time multiplier                    (1.0)
---tilt DEG       camera elevation, -85..85 deg      (10)
+--tilt DEG       camera elevation, -85..85 deg      (15)
 --azimuth DEG    camera angle around the planet     (10)
 --roll DEG       camera roll around its axis        (12)
 --dist R         camera distance in planet radii    (6.5)
+--zoom X         framing zoom, 0.5..3.0             (1.0)
 --no-stars       no star field
 --snapshot PATH  render a single frame and exit
 --cols N         frame width  for --snapshot        (160)
