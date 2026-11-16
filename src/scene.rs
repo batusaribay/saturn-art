@@ -178,6 +178,19 @@ pub struct Params {
 // main renderer
 // ---------------------------------------------------------------------------
 
+fn camera_basis(el: f32, az: f32, roll: f32, dist: f32) -> (V3, V3, V3, V3) {
+    let (se, ce) = el.sin_cos();
+    let (sa, ca) = az.sin_cos();
+    let cam = V3::new(dist * sa * ce, dist * se, -dist * ca * ce);
+    let fwd = cam.mul(-1.0).norm();
+    let right0 = UP.cross(fwd).norm();
+    let up0 = fwd.cross(right0).norm();
+    let (sr, cr) = roll.sin_cos();
+    let right = right0.mul(cr).add(up0.mul(sr));
+    let up = up0.mul(cr).sub(right0.mul(sr));
+    (cam, fwd, right, up)
+}
+
 pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Vec<Cell> {
     let cols = cols.max(4);
     let rows = rows.max(3);
@@ -185,38 +198,33 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
     // Perspective camera on an angled orbit around the planet.
     let el = p.tilt.clamp(-1.50, 1.50);
     let dist = p.distance.max(RING_OUTER + 1.2);
-    let (se, ce) = el.sin_cos();
-    let (sa, ca) = p.azimuth.sin_cos();
-    let cam = V3::new(dist * sa * ce, dist * se, -dist * ca * ce);
-    let fwd = cam.mul(-1.0).norm();
-    let right0 = UP.cross(fwd).norm();
-    let up0 = fwd.cross(right0).norm();
-    // Roll the camera so the rings cut diagonally across the frame.
-    let (sr, cr) = p.roll.sin_cos();
-    let right = right0.mul(cr).add(up0.mul(sr));
-    let up = up0.mul(cr).sub(right0.mul(sr));
+    let (cam, fwd, right, up) = camera_basis(el, p.azimuth, p.roll, dist);
     let sun = p.sun.norm();
 
-    // Auto-frame: project the outer ring circle and the planet's silhouette,
-    // then pick the field of view that fits them with a margin.
-    let mut max_u = 1.0 / (dist * dist - 1.0).max(1e-3).sqrt();
-    let mut max_v = max_u;
-    for k in 0..96 {
-        let a = k as f32 / 96.0 * std::f32::consts::TAU;
+    // The scale is fixed: measure the ring system at its widest opening the
+    // camera ever uses (26 degrees, unrolled), not at the current pose, so
+    // the picture is always the same size and always fits the terminal.
+    let widest = el.abs().max(26.0_f32.to_radians());
+    let (frame_cam, frame_fwd, frame_right, frame_up) = camera_basis(widest, p.azimuth, 0.0, dist);
+    let mut max_u = 0.0_f32;
+    let mut max_v = 0.0_f32;
+    for k in 0..72 {
+        let a = k as f32 / 72.0 * std::f32::consts::TAU;
         let pt = V3::new(
             RING_OUTER * 1.02 * a.cos(),
             0.0,
             RING_OUTER * 1.02 * a.sin(),
         );
-        let d = pt.sub(cam);
-        let z = d.dot(fwd);
+        let d = pt.sub(frame_cam);
+        let z = d.dot(frame_fwd);
         if z > 0.1 {
-            max_u = max_u.max((d.dot(right) / z).abs());
-            max_v = max_v.max((d.dot(up) / z).abs());
+            max_u = max_u.max((d.dot(frame_right) / z).abs());
+            max_v = max_v.max((d.dot(frame_up) / z).abs());
         }
     }
+    // 1.12 covers the ellipse being rolled to any angle.
     let tan_half =
-        max_v.max(max_u * 2.0 * rows as f32 / cols as f32) / FRAME_FILL / p.zoom.max(0.3);
+        (max_v.max(max_u * 2.0 * rows as f32 / cols as f32) * 1.12) / FRAME_FILL / p.zoom.max(0.3);
     let half_w = tan_half * cols as f32 / rows as f32 * CELL_ASPECT;
 
     let mut cells = vec![Cell::default(); cols * rows];

@@ -307,13 +307,9 @@ struct Cam {
     tilt: f32,
     az: f32,
     roll: f32,
-    dist: f32,
     t_tilt: f32,
     t_az: f32,
     t_roll: f32,
-    t_dist: f32,
-    zoom: f32,
-    t_zoom: f32,
     next: f32,
     base_az: f32,
     base_roll: f32,
@@ -325,13 +321,9 @@ impl Cam {
             tilt: opts.tilt_deg,
             az: opts.azimuth_deg,
             roll: opts.roll_deg,
-            dist: opts.distance,
             t_tilt: opts.tilt_deg,
             t_az: opts.azimuth_deg,
             t_roll: opts.roll_deg,
-            t_dist: opts.distance,
-            zoom: 1.0,
-            t_zoom: 1.0,
             next: 0.0,
             base_az: opts.azimuth_deg,
             base_roll: opts.roll_deg,
@@ -347,17 +339,7 @@ impl Cam {
         self.t_roll =
             (self.roll + rng.range(-9.0, 9.0)).clamp(self.base_roll - 14.0, self.base_roll + 14.0);
 
-        if rng.unit() < 0.30 {
-            // Cinematic close-up: the globe fills the frame and the rings
-            // run off the edges.
-            self.t_tilt = rng.range(14.0, 24.0);
-            self.t_dist = rng.range(5.2, 6.6);
-            self.t_zoom = rng.range(1.6, 2.5);
-        } else {
-            self.t_tilt = (self.tilt + rng.range(-6.0, 6.0)).clamp(8.0, 26.0);
-            self.t_dist = (self.dist + rng.range(-0.8, 0.8)).clamp(5.6, 7.6);
-            self.t_zoom = (self.zoom + rng.range(-0.08, 0.08)).clamp(0.90, 1.12);
-        }
+        self.t_tilt = (self.tilt + rng.range(-6.0, 6.0)).clamp(8.0, 26.0);
         self.next = now + rng.range(5.0, 10.0);
     }
 
@@ -369,8 +351,6 @@ impl Cam {
         self.tilt += (self.t_tilt - self.tilt) * k;
         self.az += (self.t_az - self.az) * k;
         self.roll += (self.t_roll - self.roll) * k;
-        self.dist += (self.t_dist - self.dist) * k;
-        self.zoom += (self.t_zoom - self.zoom) * k;
     }
 }
 
@@ -460,8 +440,8 @@ fn run(opts: Options) -> io::Result<()> {
             tilt: cam.tilt.to_radians(),
             azimuth: cam.az.to_radians(),
             roll: cam.roll.to_radians(),
-            distance: cam.dist,
-            zoom: cam.zoom,
+            distance: opts.distance,
+            zoom: opts.zoom,
             spin: t * SPIN_RATE,
             sun: opts.sun,
             time: t,
