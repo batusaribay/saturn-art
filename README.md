@@ -1,6 +1,6 @@
 # saturn-art
 
-A live, ray-traced Saturn spinning in colored ASCII art.
+A Rust CLI that renders a live, ray-traced Saturn.
 
 ![saturn-art in a terminal](demo.gif)
 

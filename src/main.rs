@@ -202,7 +202,7 @@ fn parse_args() -> Result<Options, String> {
 fn print_help() {
     println!(
         "\
-A live, ray-traced Saturn spinning in colored ASCII art
+A Rust CLI that renders a live, ray-traced Saturn
 
 Usage
   saturn-art                              run it
