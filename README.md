@@ -1,30 +1,11 @@
 # saturn-art
 
+A live, ray-traced Saturn spinning in colored ASCII art.
+
 ![saturn-art in a terminal](demo.gif)
 
 The GIF above is a compressed preview. It looks much better in a real terminal,
 at full resolution, in 24-bit color, and in motion.
-
-## What it is
-
-A single Rust binary that renders Saturn in the terminal in real time. Every
-character is a ray cast through a 3D model of the planet, its atmosphere, and
-its rings, shaded in linear light and quantized to a character ramp. There are
-no sprites and no pre-rendered frames: the ring shadow, the terminator, and the
-perspective stay consistent while the globe turns.
-
-It runs in the terminal you already have, needs no assets, and works over SSH.
-Point it at the sky and leave it running.
-
-## Why this exists
-
-Terminal art is usually either a static ASCII drawing or a loop of pre-made
-frames. Saturn is a good argument for doing the real thing instead: the rings
-are a thin sheet seen almost edge-on, so their shadow, their near/far
-perspective, and the planet's shadow on them all depend on where the sun and
-the camera are. Animating that by hand is a geometry problem, not an art
-problem. Casting a ray per cell solves it once and then lets you move the
-camera, change the ring opening, or watch a storm rotate without any new art.
 
 ## How it works
 
