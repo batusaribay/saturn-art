@@ -672,7 +672,7 @@ fn gauss(x: f32, center: f32, width: f32) -> f32 {
 fn star(col: usize, row: usize, time: f32) -> Rgb {
     let h = hash2(col as u32, row as u32);
     // roughly 18 in 1000 cells hold a star
-    if h % 1000 >= 14 {
+    if h % 1000 >= 8 {
         return Rgb::ZERO;
     }
     let h2 = hash2(col as u32 ^ 0x9e37, row as u32 ^ 0x85eb);

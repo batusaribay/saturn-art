@@ -1,4 +1,3 @@
 # The project is Rust-only for GitHub language statistics.
 Cargo.lock linguist-generated
 demo.gif binary
-demo.mp4 binary

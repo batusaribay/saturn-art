@@ -4,7 +4,8 @@ A live, ray-traced Saturn spinning in colored ASCII art
 
 ![saturn-art in a terminal](demo.gif)
 
-A higher-quality MP4 of the same scene is in [demo.mp4](demo.mp4).
+The GIF above is a compressed preview. It looks much better in a real terminal,
+at full resolution, in 24-bit color, and in motion.
 
 ## What it is
 
