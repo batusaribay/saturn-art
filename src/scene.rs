@@ -146,8 +146,6 @@ pub struct Cell {
     pub b: u8,
     /// Index in the glyph ramp, used to damp frame-to-frame shimmer.
     pub gi: u8,
-    /// True for a star: those cells keep a black background.
-    pub star: bool,
 }
 
 pub struct Params {
@@ -307,14 +305,7 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
                 }
             };
 
-            cells[j * cols + i] = Cell {
-                ch,
-                r,
-                g,
-                b,
-                gi,
-                star: is_star,
-            };
+            cells[j * cols + i] = Cell { ch, r, g, b, gi };
         }
     }
 

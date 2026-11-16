@@ -55,11 +55,9 @@ camera, change the ring opening, or watch a storm rotate without any new art.
    rates, faster inside than outside, with a large-scale brightness asymmetry
    and two dark spokes that sweep around the disc.
 8. The result is converted to sRGB and mapped by luminance onto a glyph ramp,
-   with 24-bit color per cell. Lit cells also paint a dim version of their own
-   colour behind the glyph, so the gaps between characters do not read as
-   black dots. Eight ramps are built in — classic, detailed, soft, blocks,
-   dense, dots, minimal and mixed — and `c` cycles them live. A hash-based
-   star field twinkles behind everything.
+   with 24-bit color per cell. Eight ramps are built in — classic, detailed,
+   soft, blocks, dense, dots, minimal and mixed — and `c` cycles them live.
+   A hash-based star field twinkles behind everything.
 9. A small footer line lists the keys on the last row, over empty sky, so the
    scene keeps the whole terminal.
 
@@ -148,8 +146,8 @@ cargo uninstall saturn-art
   They are drawn as a zero-thickness sheet, which is why the ansae get thin.
 - Rendering scales with the terminal. A 140x45 terminal is comfortable at
   30 fps; very large terminals automatically drop to fewer samples per cell.
-- The app paints its own black sky and cell backgrounds, so it looks the same
-  on light and dark terminal themes.
+- The scene assumes a dark terminal background. In a light theme it still
+  works, but the sky will not be black.
 
 ## License
 
