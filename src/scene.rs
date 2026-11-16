@@ -86,7 +86,7 @@ impl V3 {
 pub const RING_OUTER: f32 = 2.272;
 
 /// How much of the frame the ring system may fill.
-const FRAME_FILL: f32 = 0.85;
+const FRAME_FILL: f32 = 0.70;
 
 const UP: V3 = V3::new(0.0, 1.0, 0.0);
 
@@ -681,11 +681,13 @@ fn star(col: usize, row: usize, time: f32) -> Rgb {
     // Keep every star clearly brighter than the sky so none reads as a
     // black speck on a dark terminal theme.
     let base = 0.34 + 0.42 * ((h2 >> 8) & 0xff) as f32 / 255.0;
-    let warm = (h2 >> 16) & 3 == 0;
+    let warm = (h2 >> 16) & 7 == 0;
     let c = if warm {
-        Rgb::new(0.62, 0.52, 0.40)
+        // a few slightly warm stars
+        Rgb::new(0.86, 0.82, 0.76)
     } else {
-        Rgb::new(0.44, 0.55, 0.70)
+        // the rest are neutral white-grey
+        Rgb::new(0.80, 0.80, 0.82)
     };
     c.mul(base * twinkle * 1.6)
 }

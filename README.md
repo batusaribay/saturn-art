@@ -2,7 +2,9 @@
 
 A live, ray-traced Saturn spinning in colored ASCII art
 
-![saturn-art in a terminal](preview.png)
+![saturn-art in a terminal](demo.gif)
+
+A higher-quality MP4 of the same scene is in [demo.mp4](demo.mp4).
 
 ## What it is
 
@@ -120,14 +122,6 @@ it usable from scripts and for wallpapers.
 
 ```bash
 cargo install --git https://github.com/batusaribay/saturn-art.git --locked
-```
-
-For a local build:
-
-```bash
-git clone https://github.com/batusaribay/saturn-art.git
-cd saturn-art
-make install    # or: cargo build --release
 ```
 
 ## Uninstall
