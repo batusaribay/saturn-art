@@ -25,12 +25,15 @@ use crossterm::{cursor, event, execute, terminal};
 mod color;
 mod scene;
 
-use scene::{Params, V3};
+use scene::{CHARSETS, Params, V3};
 
 const SPIN_RATE: f32 = 0.22; // radians / second, ~29 s per rotation
-// Default view: almost edge-on rings tipped up to the right, with the sun
-// nearly behind the camera so the globe stays bright and peachy.
-const BASE_TILT_DEG: f32 = 2.5;
+// Default view: rings tipped up to the right, with the sun nearly behind the
+// camera so the globe stays bright and peachy.  The live camera slowly opens
+// and closes the rings around this elevation.
+const BASE_TILT_DEG: f32 = 10.0;
+const TILT_SWING_DEG: f32 = 6.0;
+const TILT_RATE: f32 = 0.052; // ~2 minute cycle
 const BASE_AZIMUTH_DEG: f32 = 10.0;
 const BASE_ROLL_DEG: f32 = 12.0;
 const CAMERA_DISTANCE: f32 = 6.5;
@@ -54,6 +57,7 @@ struct Options {
     rows: usize,
     time: f32,
     ascii: bool,
+    charset: usize,
 }
 
 impl Default for Options {
@@ -72,6 +76,7 @@ impl Default for Options {
             rows: 50,
             time: 0.0,
             ascii: false,
+            charset: 0,
         }
     }
 }
@@ -162,6 +167,15 @@ fn parse_args() -> Result<Options, String> {
                 o.distance = next("--dist")?.parse().map_err(|_| "bad --dist")?;
                 o.distance = o.distance.clamp(3.6, 60.0);
             }
+            "--charset" => {
+                let v = next("--charset")?;
+                o.charset = CHARSETS
+                    .iter()
+                    .position(|c| c.name == v)
+                    .or_else(|| v.parse::<usize>().ok())
+                    .filter(|i| *i < CHARSETS.len())
+                    .ok_or_else(|| format!("unknown charset: {v}"))?;
+            }
             "--no-stars" => o.stars = false,
             "--snapshot" => o.snapshot = Some(next("--snapshot")?),
             "--cols" => {
@@ -185,23 +199,23 @@ fn parse_args() -> Result<Options, String> {
 fn print_help() {
     println!(
         "\
-saturn-art {} — a live, realistic Saturn in colored ASCII art
+A live, ray-traced Saturn spinning in colored ASCII art
 
-USAGE
-  saturn-art                        run it
-  saturn-art --help                 this text
-  saturn-art --snapshot out.ppm     render one frame to a PPM image
+Usage
+  saturn-art                              run it
+  saturn-art --snapshot out.ppm           render one frame to a PPM image
+  saturn-art --snapshot - --ascii         print a plain-text frame
+  saturn-art --help                       this text
 
-OPTIONS
+Options
+  --view NAME      edge | classic | dramatic | closeup
+  --charset NAME   glyph ramp (see Charsets)           (classic)
   --fps N          animation frame rate, 5..120       (30)
   --speed X        time multiplier                    (1.0)
-  --view NAME      classic | dramatic | closeup | edge
-  --tilt DEG       camera elevation, -85..85 deg      (2.5)
+  --tilt DEG       camera elevation, -85..85 deg      (10)
   --azimuth DEG    camera angle around the planet     (10)
   --roll DEG       camera roll around its axis        (12)
-                    (overrides the view preset if given after it)
   --dist R         camera distance in planet radii    (6.5)
-                    (smaller = stronger perspective)
   --no-stars       no star field
   --snapshot PATH  render a single frame and exit
   --cols N         frame width  for --snapshot        (160)
@@ -209,23 +223,20 @@ OPTIONS
   --time SECS      scene time for --snapshot          (0)
   --ascii          with --snapshot -, print plain text
 
-VIEWS
-  edge       near edge-on rings, tipped up, bright globe  (default)
+Views
+  edge       rings tipped up to the right, bright globe  (default)
   classic    straight-on postcard, rings open, no roll
-  dramatic   angled/rolled 3D view, near rings larger
+  dramatic   angled and rolled, near rings larger
   closeup    low camera, strong perspective, rings wrap the globe
 
-KEYS
-  q / Esc   quit            space   pause
-  + / -     speed           s       toggle stars
-  h         hide hint       r       reset
+Charsets
+  classic   detailed   soft   blocks   dense   dots   minimal   mixed
 
-One perspective ray per character cell: a latitude/longitude atmosphere
-model (peach-cream zones, tan belts, mauve-brown poles), a near edge-on ring
-plane with D/C/B/A ring densities and the Cassini and Encke gaps, plus the
-planet's shadow on the rings and the rings' shadow on the planet. The ring
-material orbits at Keplerian rates, and the globe turns once every ~29 s.",
-        env!("CARGO_PKG_VERSION")
+Keys
+  q / Esc   quit            space   pause
+  + / -     speed           c       cycle charset
+  s         stars           h       hide footer
+  r         reset"
     );
 }
 
@@ -277,6 +288,9 @@ fn run(opts: Options) -> io::Result<()> {
     let mut paused = false;
     let mut stars = opts.stars;
     let mut hint = true;
+    let mut charset = opts.charset;
+    let mut status: Option<(String, f32)> = None;
+    let mut dims = (0usize, 0usize);
 
     'main: loop {
         let frame_start = Instant::now();
@@ -295,15 +309,32 @@ fn run(opts: Options) -> io::Result<()> {
             match k.code {
                 KeyCode::Char('q') | KeyCode::Esc => break 'main,
                 KeyCode::Char('c') if ctrl => break 'main,
-                KeyCode::Char(' ') => paused = !paused,
-                KeyCode::Char('+') | KeyCode::Char('=') => speed = (speed * 1.25).min(8.0),
-                KeyCode::Char('-') | KeyCode::Char('_') => speed = (speed / 1.25).max(0.2),
-                KeyCode::Char('s') | KeyCode::Char('S') => stars = !stars,
+                KeyCode::Char(' ') => {
+                    paused = !paused;
+                    status = Some((if paused { "paused" } else { "resumed" }.into(), 2.5));
+                }
+                KeyCode::Char('+') | KeyCode::Char('=') => {
+                    speed = (speed * 1.25).min(8.0);
+                    status = Some((format!("speed {speed:.2}x"), 2.5));
+                }
+                KeyCode::Char('-') | KeyCode::Char('_') => {
+                    speed = (speed / 1.25).max(0.2);
+                    status = Some((format!("speed {speed:.2}x"), 2.5));
+                }
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    charset = (charset + 1) % CHARSETS.len();
+                    status = Some((format!("charset: {}", CHARSETS[charset].name), 2.5));
+                }
+                KeyCode::Char('s') | KeyCode::Char('S') => {
+                    stars = !stars;
+                    status = Some((format!("stars: {}", if stars { "on" } else { "off" }), 2.5));
+                }
                 KeyCode::Char('h') | KeyCode::Char('H') => hint = !hint,
                 KeyCode::Char('r') | KeyCode::Char('R') => {
                     t = 0.0;
                     speed = opts.speed;
                     paused = false;
+                    status = Some(("reset".into(), 2.5));
                 }
                 _ => {}
             }
@@ -319,7 +350,7 @@ fn run(opts: Options) -> io::Result<()> {
         let rows = (rows as usize).max(3);
 
         let p = Params {
-            tilt: opts.tilt_deg.to_radians() + 0.035 * (t * 0.09).sin(),
+            tilt: opts.tilt_deg.to_radians() + TILT_SWING_DEG.to_radians() * (t * TILT_RATE).sin(),
             azimuth: opts.azimuth_deg.to_radians() + 0.055 * (t * 0.07 + 1.0).sin(),
             roll: opts.roll_deg.to_radians(),
             distance: opts.distance,
@@ -327,15 +358,21 @@ fn run(opts: Options) -> io::Result<()> {
             sun: opts.sun,
             time: t,
             stars,
+            ramp: CHARSETS[charset].ramp,
         };
         let cells = scene::render(cols, rows, &p);
 
         let mut s = String::with_capacity(cols * rows * 8 + 64);
         let mut last_rgb = (0u8, 0u8, 0u8);
+        if dims != (cols, rows) {
+            // New geometry: wipe whatever the previous layout left behind,
+            // and make sure the cursor stays hidden after a window change.
+            s.push_str("\x1b[2J");
+            dims = (cols, rows);
+        }
+        s.push_str("\x1b[?25l\x1b[1;1H");
         for j in 0..rows {
-            if j == 0 {
-                s.push_str("\x1b[1;1H");
-            } else {
+            if j > 0 {
                 let _ = write!(s, "\x1b[{};1H", j + 1);
             }
             for i in 0..cols {
@@ -361,15 +398,27 @@ fn run(opts: Options) -> io::Result<()> {
 
         // Overlay the hint on the last row rather than sacrificing a row of
         // the scene: the bottom of the frame is empty sky at normal tilts.
+        if let Some((_, left)) = &mut status {
+            *left -= dt;
+            if *left <= 0.0 {
+                status = None;
+            }
+        }
+
         if hint {
             let _ = write!(s, "\x1b[{};1H\x1b[38;2;104;104;116m", rows);
             let mut text = String::from("saturn-art");
             if paused {
                 text.push_str("   paused");
-            } else if (speed - 1.0).abs() > 0.01 {
-                let _ = write!(text, "   {speed:.2}x");
             }
-            text.push_str("   q quit   space pause   +/- speed   s stars   h hide");
+            match &status {
+                Some((msg, _)) => {
+                    text.push_str("   ");
+                    text.push_str(msg);
+                }
+                None => text
+                    .push_str("   q quit   space pause   +/- speed   c charset   s stars   h hide"),
+            }
             let mut used = 0usize;
             for ch in text.chars() {
                 if used >= cols {
@@ -411,6 +460,7 @@ fn snapshot(opts: &Options) -> io::Result<()> {
         sun: opts.sun,
         time: opts.time,
         stars: opts.stars,
+        ramp: CHARSETS[opts.charset].ramp,
     };
     let cells = scene::render(opts.cols, opts.rows, &p);
 

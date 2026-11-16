@@ -30,10 +30,11 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 
 ## How it works
 
-1. The camera is a real perspective camera on an angled orbit. It is placed
-   just 2.5 degrees above the ring plane, so the rings read as a thin bright
-   blade tipped up to the right, and the near ansa is noticeably larger than
-   the far one.
+1. The camera is a real perspective camera on an angled orbit, tipped up to
+   the right by a 12 degree roll and placed 10 degrees above the ring plane,
+   so the rings read as a bright blade and the near ansa is noticeably larger
+   than the far one. Over about two minutes it opens the rings to 16 degrees
+   and closes them to 4, lingering at both ends.
 2. Each character cell casts four to nine rays, depending on the terminal
    size, and composites what they hit. This is what keeps the rings from
    flickering and dropping out at the ansae.
@@ -53,9 +54,10 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 7. The ring material orbits: an angular density pattern rotates at Keplerian
    rates, faster inside than outside, with a large-scale brightness asymmetry
    and two dark spokes that sweep around the disc.
-8. The result is converted to sRGB and mapped by luminance onto
-   `" .:-=+*#%@"`, with 24-bit color per cell. A hash-based star field twinkles
-   behind everything.
+8. The result is converted to sRGB and mapped by luminance onto a glyph ramp,
+   with 24-bit color per cell. Eight ramps are built in — classic, detailed,
+   soft, blocks, dense, dots, minimal and mixed — and `c` cycles them live.
+   A hash-based star field twinkles behind everything.
 9. A small footer line lists the keys on the last row, over empty sky, so the
    scene keeps the whole terminal.
 
@@ -65,7 +67,7 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 
 | View | Look |
 | --- | --- |
-| `saturn-art` | Near edge-on rings tipped up to the right (default). |
+| `saturn-art` | Rings tipped up to the right; the camera slowly opens and closes them (default). |
 | `saturn-art --view classic` | Straight-on postcard, rings open, no roll. |
 | `saturn-art --view dramatic` | Angled and rolled, near rings larger. |
 | `saturn-art --view closeup` | Low camera, strong perspective, rings wrap the globe. |
@@ -77,6 +79,7 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 | `q` / `Esc` | Quit. |
 | `space` | Pause. |
 | `+` / `-` | Speed up / slow down. |
+| `c` | Cycle the glyph ramp. |
 | `s` | Toggle the star field. |
 | `h` | Hide or show the footer. |
 | `r` | Reset time and speed. |
@@ -85,9 +88,10 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 
 ```text
 --view NAME      edge | classic | dramatic | closeup
+--charset NAME   glyph ramp                         (classic)
 --fps N          animation frame rate, 5..120       (30)
 --speed X        time multiplier                    (1.0)
---tilt DEG       camera elevation, -85..85 deg      (2.5)
+--tilt DEG       camera elevation, -85..85 deg      (10)
 --azimuth DEG    camera angle around the planet     (10)
 --roll DEG       camera roll around its axis        (12)
 --dist R         camera distance in planet radii    (6.5)
@@ -105,8 +109,10 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 saturn-art
 saturn-art --view classic
 saturn-art --view closeup --speed 1.5
+saturn-art --charset detailed
+saturn-art --charset dots --view edge
 
-saturn-art --tilt 1.2          # even more edge-on
+saturn-art --tilt 2           # nearly edge-on
 saturn-art --roll 18           # steeper diagonal
 saturn-art --dist 4            # stronger perspective
 

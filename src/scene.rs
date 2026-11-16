@@ -93,8 +93,46 @@ const UP: V3 = V3::new(0.0, 1.0, 0.0);
 /// Character cells are about half as wide as they are tall on screen.
 const CELL_ASPECT: f32 = 0.5;
 
-/// Brightness ramp, dark to bright.
-const RAMP: &[u8] = b" .:-=+*#%@";
+/// A named glyph ramp, ordered dark to bright.  All are plain ASCII.
+pub struct Charset {
+    pub name: &'static str,
+    pub ramp: &'static [u8],
+}
+
+pub const CHARSETS: &[Charset] = &[
+    Charset {
+        name: "classic",
+        ramp: b" .:-=+*#%@",
+    },
+    Charset {
+        name: "detailed",
+        ramp: b" .'`^\",:;Il!i~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$",
+    },
+    Charset {
+        name: "soft",
+        ramp: b" .'`,:;-~+=*#%@",
+    },
+    Charset {
+        name: "blocks",
+        ramp: b" .:;+=xX$#%@",
+    },
+    Charset {
+        name: "dense",
+        ramp: b" .,:;irsXA253hMHGS#9B&@",
+    },
+    Charset {
+        name: "dots",
+        ramp: b" .:;coCO8@",
+    },
+    Charset {
+        name: "minimal",
+        ramp: b" .:-=+*#@",
+    },
+    Charset {
+        name: "mixed",
+        ramp: b" .-~+=*ox#%@",
+    },
+];
 
 // ---------------------------------------------------------------------------
 // output
@@ -124,6 +162,8 @@ pub struct Params {
     /// Time in seconds, used only for the star twinkle.
     pub time: f32,
     pub stars: bool,
+    /// Glyph ramp, dark to bright.
+    pub ramp: &'static [u8],
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +271,9 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
                 col = Rgb::new(0.05, 0.055, 0.075);
             }
             let (r, g, b) = col.to_srgb8();
-            let is_star = bg.luma() > 0.0 && covered < 0.4;
+            // Only an essentially uncovered cell may draw a star, otherwise
+            // stars would show up inside the planet or the ring sheet.
+            let is_star = bg.luma() > 0.0 && covered < 0.03;
             let ch = if is_star {
                 if (r as u32 + g as u32 + b as u32) > 520 {
                     b'+'
@@ -239,7 +281,7 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
                     b'.'
                 }
             } else {
-                let g = glyph(r, g, b);
+                let g = glyph(r, g, b, p.ramp);
                 if g == b' ' && (planet > 0.55 || covered > 0.18) {
                     b'.'
                 } else {
@@ -281,12 +323,12 @@ fn shade_ray(o: V3, dir: V3, spin: f32, sun: V3, time: f32, bg: Rgb) -> (Rgb, f3
 
 /// Pick an ASCII glyph for an sRGB color.
 #[inline]
-fn glyph(r: u8, g: u8, b: u8) -> u8 {
+fn glyph(r: u8, g: u8, b: u8, ramp: &[u8]) -> u8 {
     let lum = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0;
     // The scene's useful range is roughly 0.04..0.86; spread it over the ramp
     // so the lit belts reach the dense glyphs without blowing out to white.
-    let v = ((lum - 0.045) / 0.86).clamp(0.0, 1.0).powf(0.85) * (RAMP.len() - 1) as f32;
-    RAMP[(v.round() as usize).min(RAMP.len() - 1)]
+    let v = ((lum - 0.045) / 0.86).clamp(0.0, 1.0).powf(0.85) * (ramp.len() - 1) as f32;
+    ramp[(v.round() as usize).min(ramp.len() - 1)]
 }
 
 // ---------------------------------------------------------------------------
@@ -672,7 +714,7 @@ fn gauss(x: f32, center: f32, width: f32) -> f32 {
 fn star(col: usize, row: usize, time: f32) -> Rgb {
     let h = hash2(col as u32, row as u32);
     // roughly 18 in 1000 cells hold a star
-    if h % 1000 >= 8 {
+    if h % 1000 >= 6 {
         return Rgb::ZERO;
     }
     let h2 = hash2(col as u32 ^ 0x9e37, row as u32 ^ 0x85eb);
@@ -680,7 +722,7 @@ fn star(col: usize, row: usize, time: f32) -> Rgb {
     let twinkle = 0.70 + 0.30 * (time * 1.7 + phase).sin();
     // Keep every star clearly brighter than the sky so none reads as a
     // black speck on a dark terminal theme.
-    let base = 0.34 + 0.42 * ((h2 >> 8) & 0xff) as f32 / 255.0;
+    let base = 0.22 + 0.34 * ((h2 >> 8) & 0xff) as f32 / 255.0;
     let warm = (h2 >> 16) & 7 == 0;
     let c = if warm {
         // a few slightly warm stars
@@ -689,7 +731,7 @@ fn star(col: usize, row: usize, time: f32) -> Rgb {
         // the rest are neutral white-grey
         Rgb::new(0.80, 0.80, 0.82)
     };
-    c.mul(base * twinkle * 1.6)
+    c.mul(base * twinkle * 1.5)
 }
 
 #[inline]
@@ -730,6 +772,7 @@ mod tests {
             sun: V3::new(-0.58, 0.46, -0.67).norm(),
             time: 3.0,
             stars: true,
+            ramp: CHARSETS[0].ramp,
         }
     }
 
@@ -776,9 +819,13 @@ mod tests {
     }
 
     #[test]
-    fn glyphs_cover_the_ramp() {
-        assert_eq!(glyph(0, 0, 0), b' ');
-        assert_eq!(glyph(255, 255, 255), b'@');
-        assert!(RAMP.len() >= 8);
+    fn glyphs_cover_every_ramp() {
+        for cs in CHARSETS {
+            assert_eq!(cs.ramp[0], b' ');
+            assert!(cs.ramp.len() >= 8, "{}", cs.name);
+            assert_eq!(glyph(0, 0, 0, cs.ramp), b' ');
+            assert_eq!(glyph(255, 255, 255, cs.ramp), *cs.ramp.last().unwrap());
+        }
+        assert_eq!(CHARSETS[0].name, "classic");
     }
 }
