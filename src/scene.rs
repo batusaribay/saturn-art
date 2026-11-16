@@ -52,6 +52,20 @@ impl V3 {
     }
 
     #[inline]
+    pub fn sub(self, o: Self) -> Self {
+        Self::new(self.x - o.x, self.y - o.y, self.z - o.z)
+    }
+
+    #[inline]
+    pub fn cross(self, o: Self) -> Self {
+        Self::new(
+            self.y * o.z - self.z * o.y,
+            self.z * o.x - self.x * o.z,
+            self.x * o.y - self.y * o.x,
+        )
+    }
+
+    #[inline]
     pub fn norm(self) -> Self {
         let l = self.dot(self).sqrt().max(1e-6);
         self.mul(1.0 / l)
@@ -71,9 +85,10 @@ impl V3 {
 /// Planet radius is 1; Saturn's rings are ~2.27 planet radii across.
 pub const RING_OUTER: f32 = 2.272;
 
-/// Distance of the imaginary orthographic camera.  Only used to keep the
-/// ray origin comfortably in front of the geometry.
-const CAM_D: f32 = 9.0;
+/// How much of the frame the ring system may fill.
+const FRAME_FILL: f32 = 0.78;
+
+const UP: V3 = V3::new(0.0, 1.0, 0.0);
 
 /// Character cells are about half as wide as they are tall on screen.
 const CELL_ASPECT: f32 = 0.5;
@@ -94,8 +109,12 @@ pub struct Cell {
 }
 
 pub struct Params {
-    /// Tilt of the ring plane toward the viewer, in radians.
+    /// Elevation of the camera above the ring plane, in radians.
     pub tilt: f32,
+    /// Azimuth of the camera around the planet, in radians.
+    pub azimuth: f32,
+    /// Camera distance in planet radii (drives the perspective).
+    pub distance: f32,
     /// Planet rotation angle, in radians.
     pub spin: f32,
     /// Unit vector pointing from the planet toward the sun.
@@ -113,17 +132,37 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
     let cols = cols.max(4);
     let rows = rows.max(3);
 
-    let (st, ct) = p.tilt.sin_cos();
-
-    // Frame the ring system: half the vertical extent of the view, in planet
-    // radii, chosen so the widest part of the rings fits both ways.
-    let half_h = (RING_OUTER * 1.07 * 2.0 * rows as f32 / cols as f32)
-        .max(1.30)
-        .max(RING_OUTER * st.abs() * 1.06 + 0.03);
-    let half_w = half_h * cols as f32 / rows as f32 * CELL_ASPECT;
-    // Camera space -> world space is a rotation about x by +tilt.
-    let dir = V3::new(0.0, -st, ct);
+    // Perspective camera on an angled orbit around the planet.
+    let el = p.tilt.clamp(-1.50, 1.50);
+    let dist = p.distance.max(RING_OUTER + 1.2);
+    let (se, ce) = el.sin_cos();
+    let (sa, ca) = p.azimuth.sin_cos();
+    let cam = V3::new(dist * sa * ce, dist * se, -dist * ca * ce);
+    let fwd = cam.mul(-1.0).norm();
+    let right = UP.cross(fwd).norm();
+    let up = fwd.cross(right).norm();
     let sun = p.sun.norm();
+
+    // Auto-frame: project the outer ring circle and the planet's silhouette,
+    // then pick the field of view that fits them with a margin.
+    let mut max_u = 1.0 / (dist * dist - 1.0).max(1e-3).sqrt();
+    let mut max_v = max_u;
+    for k in 0..96 {
+        let a = k as f32 / 96.0 * std::f32::consts::TAU;
+        let pt = V3::new(
+            RING_OUTER * 1.02 * a.cos(),
+            0.0,
+            RING_OUTER * 1.02 * a.sin(),
+        );
+        let d = pt.sub(cam);
+        let z = d.dot(fwd);
+        if z > 0.1 {
+            max_u = max_u.max((d.dot(right) / z).abs());
+            max_v = max_v.max((d.dot(up) / z).abs());
+        }
+    }
+    let tan_half = max_v.max(max_u * 2.0 * rows as f32 / cols as f32) / FRAME_FILL;
+    let half_w = tan_half * cols as f32 / rows as f32 * CELL_ASPECT;
 
     let mut cells = vec![Cell::default(); cols * rows];
 
@@ -142,13 +181,12 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
             let mut acc = Rgb::ZERO;
             let mut covered = 0.0_f32;
             for (ox, oy) in SUB {
-                let x = ((i as f32 + 0.5 + ox) / cols as f32 * 2.0 - 1.0) * half_w;
-                let y = (1.0 - (j as f32 + 0.5 + oy) / rows as f32 * 2.0) * half_h;
+                let u = ((i as f32 + 0.5 + ox) / cols as f32 * 2.0 - 1.0) * half_w;
+                let v = (1.0 - (j as f32 + 0.5 + oy) / rows as f32 * 2.0) * tan_half;
 
-                // Orthographic ray, tilted into world space.
-                let o = V3::new(x, y * ct + CAM_D * st, y * st - CAM_D * ct);
+                let dir = fwd.add(right.mul(u)).add(up.mul(v)).norm();
 
-                let (c, cov) = shade_ray(o, dir, p.spin, sun, bg);
+                let (c, cov) = shade_ray(cam, dir, p.spin, sun, p.time, bg);
                 acc = acc.add(c);
                 covered += cov;
             }
@@ -178,9 +216,9 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
 /// Trace one ray, compositing what it hits over the background `bg`.
 /// Also returns how much of the ray was covered by Saturn (0..1).
 #[inline]
-fn shade_ray(o: V3, dir: V3, spin: f32, sun: V3, bg: Rgb) -> (Rgb, f32) {
+fn shade_ray(o: V3, dir: V3, spin: f32, sun: V3, time: f32, bg: Rgb) -> (Rgb, f32) {
     let sphere = sphere_hit(o, dir);
-    let ring = ring_hit(o, dir, sun);
+    let ring = ring_hit(o, dir, sun, time);
 
     match sphere {
         Some((t_s, pos)) => {
@@ -204,7 +242,9 @@ fn shade_ray(o: V3, dir: V3, spin: f32, sun: V3, bg: Rgb) -> (Rgb, f32) {
 #[inline]
 fn glyph(r: u8, g: u8, b: u8) -> u8 {
     let lum = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0;
-    let v = lum.powf(1.00) * (RAMP.len() - 1) as f32;
+    // The scene's useful range is roughly 0.04..0.86; spread it over the ramp
+    // so the lit belts reach the dense glyphs without blowing out to white.
+    let v = ((lum - 0.04) / 0.82).clamp(0.0, 1.0).powf(0.85) * (RAMP.len() - 1) as f32;
     RAMP[(v.round() as usize).min(RAMP.len() - 1)]
 }
 
@@ -231,7 +271,7 @@ fn sphere_hit(o: V3, d: V3) -> Option<(f32, V3)> {
 
 /// Ray/ring-plane intersection.  Returns (distance, opacity, color).
 #[inline]
-fn ring_hit(o: V3, d: V3, sun: V3) -> Option<(f32, f32, Rgb)> {
+fn ring_hit(o: V3, d: V3, sun: V3, time: f32) -> Option<(f32, f32, Rgb)> {
     if d.y.abs() < 1e-6 {
         return None;
     }
@@ -254,7 +294,7 @@ fn ring_hit(o: V3, d: V3, sun: V3) -> Option<(f32, f32, Rgb)> {
     };
     let ndl = n.dot(sun).max(0.0);
     // Rings are thin and scatter light through, so there is a healthy floor.
-    let light = 0.54 + 0.90 * ndl;
+    let light = 0.60 + 0.96 * ndl;
 
     // The planet's shadow falls across the far side of the rings.  It is deep
     // but never pure black: scattered light still reaches the ring particles.
@@ -262,7 +302,7 @@ fn ring_hit(o: V3, d: V3, sun: V3) -> Option<(f32, f32, Rgb)> {
 
     // Slow density waves in the ring plane.
     let ang = q.z.atan2(q.x);
-    let wave = 0.93 + 0.07 * (ang * 22.0 + radius * 26.0).sin();
+    let wave = 0.93 + 0.07 * (ang * 22.0 + radius * 26.0 - time * 0.55).sin();
 
     Some((t, alpha, tone.mul(light * shadow * wave)))
 }
@@ -319,7 +359,7 @@ fn shade_planet(p: V3, d: V3, spin: f32, sun: V3) -> Rgb {
     let ndl = n.dot(sun);
     let diff = smoothstep(-0.02, 0.11, ndl);
     let lambert = 0.34 + 0.66 * ndl.max(0.0);
-    let mut light = (0.048 + 0.952 * diff) * lambert * 0.90;
+    let mut light = (0.042 + 0.958 * diff) * lambert * 0.94;
 
     // Rings throw a shadow band onto the planet.
     let shadow = ring_shadow_on_planet(p, sun);
@@ -327,12 +367,12 @@ fn shade_planet(p: V3, d: V3, spin: f32, sun: V3) -> Rgb {
 
     // Limb darkening + a pale atmospheric rim on the sunlit edge.
     let ndv = n.dot(d.mul(-1.0)).max(0.0);
-    let limb = 0.68 + 0.32 * ndv.powf(0.45);
-    let rim = (1.0 - ndv).powf(2.6) * 0.13 * smoothstep(0.0, 0.10, ndl);
+    let limb = 0.56 + 0.44 * ndv.powf(0.50);
+    let rim = (1.0 - ndv).powf(2.8) * 0.09 * smoothstep(0.0, 0.12, ndl);
 
     // A whisper of desaturation keeps the butterscotch from going orange.
     let grey = Rgb::new(albedo.luma(), albedo.luma(), albedo.luma());
-    let albedo = albedo.lerp(grey, 0.10);
+    let albedo = albedo.lerp(grey, 0.06);
 
     albedo
         .mul(light * limb)
@@ -346,33 +386,33 @@ fn shade_planet(p: V3, d: V3, spin: f32, sun: V3) -> Rgb {
 /// Latitude (degrees) -> albedo, from the south pole (-90) to the north (90).
 /// Pale butterscotch belts, cream equatorial zone, bluish-gray polar hood.
 const BANDS_HEX: &[(f32, u32)] = &[
-    (-90.0, 0x6f6557),
-    (-82.0, 0x8e8270),
-    (-74.0, 0xab9f86),
-    (-66.0, 0xc4b79a),
-    (-58.0, 0xd3c49f),
-    (-50.0, 0xc6b992),
-    (-42.0, 0xe4d5ae),
-    (-34.0, 0xe8dbb8),
-    (-27.0, 0xd7bd8a),
-    (-20.0, 0xe0c998),
-    (-13.0, 0xeee1bc),
-    (-6.0, 0xf7edcb),
-    (1.0, 0xf6ecc9),
-    (8.0, 0xebdcb2),
-    (14.0, 0xd6b884),
-    (20.0, 0xdfc795),
-    (27.0, 0xebe0b8),
-    (34.0, 0xd3bd94),
-    (41.0, 0xc9bb92),
-    (48.0, 0xd9cca6),
-    (55.0, 0xcfc3a2),
-    (62.0, 0xcbbfa2),
-    (70.0, 0xc1b9a4),
-    (77.0, 0xb6b4a8),
-    (83.0, 0xa8ada5),
-    (88.0, 0x9ea7a3),
-    (90.0, 0x99a3a0),
+    (-90.0, 0x5f5140),
+    (-82.0, 0x7c6a54),
+    (-74.0, 0x988262),
+    (-66.0, 0xb09872),
+    (-58.0, 0xc4ac82),
+    (-50.0, 0xaa8c5a),
+    (-42.0, 0xd4ba8b),
+    (-34.0, 0xdcc495),
+    (-27.0, 0xbb9c63),
+    (-20.0, 0xccb281),
+    (-13.0, 0xe0ca9e),
+    (-6.0, 0xe8d6ac),
+    (1.0, 0xe6d2a8),
+    (8.0, 0xdac394),
+    (14.0, 0xbb985b),
+    (20.0, 0xc8ad7a),
+    (27.0, 0xdcc69a),
+    (34.0, 0xc0a87c),
+    (41.0, 0xb0996b),
+    (48.0, 0xd0ba90),
+    (55.0, 0xb8a37c),
+    (62.0, 0xcdb98e),
+    (70.0, 0xb3a586),
+    (77.0, 0xc0b49a),
+    (83.0, 0xa8a795),
+    (88.0, 0x949a8c),
+    (90.0, 0x8d9387),
 ];
 
 fn band_table() -> &'static [(f32, Rgb)] {
@@ -408,7 +448,7 @@ fn surface(lat: f32, lon: f32) -> Rgb {
     // circles.  This latitude ripple is what makes the rotation legible.
     let lat_band = lat
         + 0.085 * (lon * 2.0 + 0.9 * (lat * 5.0).sin()).sin()
-        + 0.030 * (lon * 5.0 - 1.3 * (lat * 3.0).sin()).sin();
+        + 0.038 * (lon * 5.0 - 1.3 * (lat * 3.0).sin()).sin();
     let c = band_color(lat_band.to_degrees());
 
     // Fine zonal banding: Saturn's belts are full of thin ribbons.
@@ -423,12 +463,13 @@ fn surface(lat: f32, lon: f32) -> Rgb {
 
     // Storm ovals and dark barges drifting with the rotation.  The big white
     // oval is a Great White Spot-style outbreak, ~30 degrees of longitude.
-    k += 0.22 * oval(lat, lon, 0.40, 1.30, 0.22, 0.46);
-    k += 0.16 * oval(lat, lon, 0.28, -2.10, 0.16, 0.28);
-    k += 0.13 * oval(lat, lon, 0.62, 0.55, 0.13, 0.22);
-    k += 0.12 * oval(lat, lon, -0.40, -0.60, 0.17, 0.34);
-    k += 0.10 * oval(lat, lon, -0.56, 2.20, 0.12, 0.22);
-    k += 0.10 * oval(lat, lon, -0.12, 2.60, 0.11, 0.20);
+    k += 0.26 * oval(lat, lon, 0.40, 1.30, 0.26, 0.50);
+    k += 0.20 * oval(lat, lon, 0.28, -2.10, 0.20, 0.32);
+    k += 0.16 * oval(lat, lon, 0.60, 0.55, 0.16, 0.26);
+    k += 0.16 * oval(lat, lon, -0.38, -0.60, 0.21, 0.38);
+    k += 0.13 * oval(lat, lon, -0.56, 2.20, 0.16, 0.26);
+    k += 0.13 * oval(lat, lon, -0.12, 2.60, 0.15, 0.24);
+    k += 0.12 * oval(lat, lon, -0.02, 0.10, 0.13, 0.20);
     k -= 0.09 * oval(lat, lon, -0.31, 0.90, 0.050, 0.22);
     k -= 0.08 * oval(lat, lon, 0.20, 3.05, 0.030, 0.10);
     k -= 0.06 * oval(lat, lon, 0.52, -1.55, 0.025, 0.08);
@@ -474,19 +515,19 @@ struct RingSeg {
 
 const RINGS_HEX: &[(f32, f32, f32, u32)] = &[
     // D ring: faint, dusty
-    (1.105, 1.236, 0.100, 0x5c5347),
+    (1.105, 1.236, 0.110, 0x4e4638),
     // C ring: translucent, grayish tan
-    (1.236, 1.530, 0.55, 0xa9a291),
+    (1.236, 1.530, 0.56, 0x8e8169),
     // B ring: the bright, dense one
-    (1.530, 1.952, 0.95, 0xeee5d2),
+    (1.530, 1.952, 0.95, 0xd2bf98),
     // Cassini Division
-    (1.952, 2.030, 0.045, 0x4e4941),
+    (1.952, 2.030, 0.045, 0x3f3a30),
     // A ring
-    (2.030, 2.212, 0.80, 0xdcd3bf),
+    (2.030, 2.212, 0.80, 0xbcaa86),
     // Encke Gap
-    (2.212, 2.227, 0.035, 0x4e4941),
+    (2.212, 2.227, 0.035, 0x3f3a30),
     // outer A ring
-    (2.227, 2.272, 0.66, 0xd6cdb8),
+    (2.227, 2.272, 0.66, 0xb4a37f),
 ];
 
 fn ring_table() -> &'static [RingSeg] {
@@ -612,6 +653,8 @@ mod tests {
     fn params() -> Params {
         Params {
             tilt: 26.0_f32.to_radians(),
+            azimuth: 18.0_f32.to_radians(),
+            distance: 9.0,
             spin: 0.7,
             sun: V3::new(-0.58, 0.46, -0.67).norm(),
             time: 3.0,

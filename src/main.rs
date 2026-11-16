@@ -1,7 +1,7 @@
 //! saturn-art — a live, realistic Saturn in colored ASCII art.
 //!
 //! Usage:
-//!   saturn-art [--fps N] [--speed X] [--tilt DEG] [--no-stars]
+//!   saturn-art [--fps N] [--speed X] [--tilt DEG] [--azimuth DEG] [--dist R]
 //!   saturn-art --snapshot out.ppm [--cols N] [--rows N] [--time SECS]
 //!   saturn-art --snapshot - --ascii [--cols N] [--rows N]   (text)
 //!   saturn-art --snapshot - [--cols N] [--rows N] > out.ppm
@@ -27,9 +27,11 @@ mod scene;
 
 use scene::{Params, V3};
 
-const SPIN_RATE: f32 = 0.135; // radians / second, ~46 s per rotation
-const BASE_TILT_DEG: f32 = 26.0;
-const SUN: V3 = V3::new(-0.58, 0.46, -0.67);
+const SPIN_RATE: f32 = 0.26; // radians / second, ~24 s per rotation
+const BASE_TILT_DEG: f32 = 30.0;
+const BASE_AZIMUTH_DEG: f32 = 22.0;
+const CAMERA_DISTANCE: f32 = 7.0;
+const SUN: V3 = V3::new(-0.48, 0.44, -0.76);
 
 // ---------------------------------------------------------------------------
 // options
@@ -39,6 +41,8 @@ struct Options {
     fps: u32,
     speed: f32,
     tilt_deg: f32,
+    azimuth_deg: f32,
+    distance: f32,
     stars: bool,
     snapshot: Option<String>,
     cols: usize,
@@ -53,6 +57,8 @@ impl Default for Options {
             fps: 30,
             speed: 1.0,
             tilt_deg: BASE_TILT_DEG,
+            azimuth_deg: BASE_AZIMUTH_DEG,
+            distance: CAMERA_DISTANCE,
             stars: true,
             snapshot: None,
             cols: 160,
@@ -98,7 +104,15 @@ fn parse_args() -> Result<Options, String> {
             }
             "--tilt" => {
                 o.tilt_deg = next("--tilt")?.parse().map_err(|_| "bad --tilt")?;
-                o.tilt_deg = o.tilt_deg.clamp(-89.0, 89.0);
+                o.tilt_deg = o.tilt_deg.clamp(-85.0, 85.0);
+            }
+            "--azimuth" | "--angle" => {
+                o.azimuth_deg = next("--azimuth")?.parse().map_err(|_| "bad --azimuth")?;
+                o.azimuth_deg = o.azimuth_deg.clamp(-360.0, 360.0);
+            }
+            "--dist" => {
+                o.distance = next("--dist")?.parse().map_err(|_| "bad --dist")?;
+                o.distance = o.distance.clamp(3.6, 60.0);
             }
             "--no-stars" => o.stars = false,
             "--snapshot" => o.snapshot = Some(next("--snapshot")?),
@@ -133,7 +147,10 @@ USAGE
 OPTIONS
   --fps N          animation frame rate, 5..120       (30)
   --speed X        time multiplier                    (1.0)
-  --tilt DEG       ring opening angle, -89..89 deg    (26)
+  --tilt DEG       camera elevation, -85..85 deg      (30)
+  --azimuth DEG    camera angle around the planet     (22)
+  --dist R         camera distance in planet radii    (7.0)
+                    (smaller = stronger perspective)
   --no-stars       no star field
   --snapshot PATH  render a single frame and exit
   --cols N         frame width  for --snapshot        (160)
@@ -146,11 +163,11 @@ KEYS
   + / -     speed           s       toggle stars
   h         hide hint       r       reset
 
-Rendered with one ray per character cell: a latitude/longitude atmosphere
-model (belted butterscotch, cream equatorial zone, bluish polar hood), a
-26.7-degree ring plane with C/B/A ring densities, the Cassini and Encke
+One perspective ray per character cell: a latitude/longitude atmosphere
+model (brown butterscotch belts, cream equatorial zone, gray polar hood),
+a 30-degree ring plane with C/B/A ring densities, the Cassini and Encke
 gaps, plus the planet's shadow on the rings and the rings' shadow on the
-planet.",
+planet. The camera slowly drifts and the planet turns once every 24 s.",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -245,7 +262,9 @@ fn run(opts: Options) -> io::Result<()> {
         let rows = (rows as usize).max(3);
 
         let p = Params {
-            tilt: (opts.tilt_deg.to_radians() + 0.020 * (t * 0.11).sin()),
+            tilt: opts.tilt_deg.to_radians() + 0.035 * (t * 0.09).sin(),
+            azimuth: opts.azimuth_deg.to_radians() + 0.055 * (t * 0.07 + 1.0).sin(),
+            distance: opts.distance,
             spin: t * SPIN_RATE,
             sun: SUN,
             time: t,
@@ -321,6 +340,8 @@ fn run(opts: Options) -> io::Result<()> {
 fn snapshot(opts: &Options) -> io::Result<()> {
     let p = Params {
         tilt: opts.tilt_deg.to_radians(),
+        azimuth: opts.azimuth_deg.to_radians(),
+        distance: opts.distance,
         spin: opts.time * SPIN_RATE,
         sun: SUN,
         time: opts.time,
