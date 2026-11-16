@@ -29,11 +29,13 @@ use scene::{CHARSETS, Params, V3};
 
 const SPIN_RATE: f32 = 0.30; // radians / second, ~21 s per rotation
 // Default view: rings tipped up to the right, with the sun nearly behind the
-// camera so the globe stays bright and peachy.  The live camera slowly opens
-// and closes the rings around this elevation.
-const BASE_TILT_DEG: f32 = 10.0;
-const TILT_SWING_DEG: f32 = 0.0;
-const TILT_RATE: f32 = 0.052; // ~2 minute cycle
+// camera so the globe stays bright and peachy.  The live camera travels a
+// seasonal arc, orbiting and opening/closing the rings as it goes.
+const BASE_TILT_DEG: f32 = 15.0;
+const TILT_DRIFT_DEG: f32 = 11.0;
+const AZIMUTH_DRIFT_DEG: f32 = 18.0;
+const ROLL_DRIFT_DEG: f32 = 8.0;
+const DISTANCE_DRIFT: f32 = 0.7;
 const BASE_AZIMUTH_DEG: f32 = 10.0;
 const BASE_ROLL_DEG: f32 = 12.0;
 const CAMERA_DISTANCE: f32 = 6.5;
@@ -212,7 +214,7 @@ Options
   --charset NAME   glyph ramp (see Charsets)           (classic)
   --fps N          animation frame rate, 5..120       (30)
   --speed X        time multiplier                    (1.0)
-  --tilt DEG       camera elevation, -85..85 deg      (11)
+  --tilt DEG       camera elevation, -85..85 deg      (15)
   --azimuth DEG    camera angle around the planet     (10)
   --roll DEG       camera roll around its axis        (12)
   --dist R         camera distance in planet radii    (6.5)
@@ -350,11 +352,17 @@ fn run(opts: Options) -> io::Result<()> {
         let cols = (cols as usize).max(4);
         let rows = (rows as usize).max(3);
 
+        // A slow, hand-held camera: it orbits the globe, opens and closes the
+        // rings like a season, and backs away a little, without ever
+        // hurrying.  Separate periods keep the path from repeating.
         let p = Params {
-            tilt: opts.tilt_deg.to_radians() + TILT_SWING_DEG.to_radians() * (t * TILT_RATE).sin(),
-            azimuth: opts.azimuth_deg.to_radians(),
-            roll: opts.roll_deg.to_radians() + 0.05 * (t * 0.027 + 2.1).sin(),
-            distance: opts.distance,
+            tilt: opts.tilt_deg.to_radians()
+                + TILT_DRIFT_DEG.to_radians() * (t * 0.055 + 0.8).sin(),
+            azimuth: opts.azimuth_deg.to_radians()
+                + AZIMUTH_DRIFT_DEG.to_radians() * (t * 0.045 + 1.3).sin(),
+            roll: opts.roll_deg.to_radians()
+                + ROLL_DRIFT_DEG.to_radians() * (t * 0.033 + 2.1).sin(),
+            distance: (opts.distance + DISTANCE_DRIFT * (t * 0.027 + 0.4).sin()).max(3.6),
             spin: t * SPIN_RATE,
             sun: opts.sun,
             time: t,

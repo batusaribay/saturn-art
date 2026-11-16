@@ -31,10 +31,10 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 1. The camera is a real perspective camera on an angled orbit, tipped up to
    the right by a 12 degree roll and placed 11 degrees above the ring plane,
    so the rings read as a bright blade and the near ansa is noticeably larger
-   than the far one. It drifts slowly around the planet like a hand-held
-   camera in orbit, changing the phase and the ring opening over a minute or
-   two, while glyph hysteresis and temporal smoothing keep the razor-thin
-   ring edges from shimmering.
+   than the far one. It travels a slow seasonal arc, from 4 degrees of ring
+   opening to 26 and back, while orbiting the globe and easing the camera
+   back and forth, each on its own period. Glyph hysteresis and temporal
+   smoothing keep the razor-thin ring edges from shimmering as it moves.
 2. Each character cell casts four to nine rays, depending on the terminal
    size, and composites what they hit. This is what keeps the rings from
    flickering and dropping out at the ansae.

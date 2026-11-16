@@ -281,9 +281,9 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
             // Temporal smoothing: feathers sub-cell flicker (chiefly the thin
             // ring sheet sliding across a cell) without blurring the motion.
             if let Some(pc) = prev.and_then(|p| p.get(j * cols + i)) {
-                r = ((r as u16 * 7 + pc.r as u16 * 3) / 10) as u8;
-                g = ((g as u16 * 7 + pc.g as u16 * 3) / 10) as u8;
-                b = ((b as u16 * 7 + pc.b as u16 * 3) / 10) as u8;
+                r = ((r as u16 * 6 + pc.r as u16 * 4) / 10) as u8;
+                g = ((g as u16 * 6 + pc.g as u16 * 4) / 10) as u8;
+                b = ((b as u16 * 6 + pc.b as u16 * 4) / 10) as u8;
             }
             // Only an essentially uncovered cell may draw a star, otherwise
             // stars would show up inside the planet or the ring sheet.
@@ -366,7 +366,7 @@ fn glyph_with_index(
         if let Some(pc) = prev.get(cell) {
             let pi = pc.gi as f32;
             // Hysteresis: only move a glyph when the brightness really moved.
-            if (v - pi).abs() < 0.85 {
+            if (v - pi).abs() < 1.05 {
                 index = pi as usize;
             }
         }
