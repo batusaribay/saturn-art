@@ -29,13 +29,8 @@ use scene::{CHARSETS, Params, V3};
 
 const SPIN_RATE: f32 = 0.30; // radians / second, ~21 s per rotation
 // Default view: rings tipped up to the right, with the sun nearly behind the
-// camera so the globe stays bright and peachy.  The live camera travels a
-// seasonal arc, orbiting and opening/closing the rings as it goes.
+// camera so the globe stays bright and peachy.  The live camera wanders.
 const BASE_TILT_DEG: f32 = 15.0;
-const TILT_DRIFT_DEG: f32 = 11.0;
-const AZIMUTH_DRIFT_DEG: f32 = 18.0;
-const ROLL_DRIFT_DEG: f32 = 8.0;
-const DISTANCE_DRIFT: f32 = 0.7;
 const BASE_AZIMUTH_DEG: f32 = 10.0;
 const BASE_ROLL_DEG: f32 = 12.0;
 const CAMERA_DISTANCE: f32 = 6.5;
@@ -52,6 +47,7 @@ struct Options {
     azimuth_deg: f32,
     roll_deg: f32,
     distance: f32,
+    zoom: f32,
     sun: V3,
     stars: bool,
     snapshot: Option<String>,
@@ -71,6 +67,7 @@ impl Default for Options {
             azimuth_deg: BASE_AZIMUTH_DEG,
             roll_deg: BASE_ROLL_DEG,
             distance: CAMERA_DISTANCE,
+            zoom: 1.0,
             sun: SUN,
             stars: true,
             snapshot: None,
@@ -169,6 +166,10 @@ fn parse_args() -> Result<Options, String> {
                 o.distance = next("--dist")?.parse().map_err(|_| "bad --dist")?;
                 o.distance = o.distance.clamp(3.6, 60.0);
             }
+            "--zoom" => {
+                o.zoom = next("--zoom")?.parse().map_err(|_| "bad --zoom")?;
+                o.zoom = o.zoom.clamp(0.5, 1.5);
+            }
             "--charset" => {
                 let v = next("--charset")?;
                 o.charset = CHARSETS
@@ -218,6 +219,7 @@ Options
   --azimuth DEG    camera angle around the planet     (10)
   --roll DEG       camera roll around its axis        (12)
   --dist R         camera distance in planet radii    (6.5)
+  --zoom X         framing zoom, 0.5..1.5             (1.0)
   --no-stars       no star field
   --snapshot PATH  render a single frame and exit
   --cols N         frame width  for --snapshot        (160)
@@ -276,6 +278,87 @@ fn install_panic_hook() {
 // live mode
 // ---------------------------------------------------------------------------
 
+/// Tiny deterministic-per-run PRNG (xorshift64*).
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Self {
+        Self(seed | 1)
+    }
+    fn next_u32(&mut self) -> u32 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        (x >> 32) as u32
+    }
+    fn unit(&mut self) -> f32 {
+        self.next_u32() as f32 / u32::MAX as f32
+    }
+    fn range(&mut self, a: f32, b: f32) -> f32 {
+        a + (b - a) * self.unit()
+    }
+}
+
+/// A camera that wanders: every few seconds it picks a new pose nearby and
+/// eases toward it, with the ranges clamped to keep Saturn readable.  The
+/// seed comes from the clock, so every run takes a different path.
+struct Cam {
+    tilt: f32,
+    az: f32,
+    roll: f32,
+    dist: f32,
+    t_tilt: f32,
+    t_az: f32,
+    t_roll: f32,
+    t_dist: f32,
+    zoom: f32,
+    t_zoom: f32,
+    next: f32,
+}
+
+impl Cam {
+    fn new(opts: &Options, rng: &mut Rng) -> Self {
+        let mut c = Self {
+            tilt: opts.tilt_deg,
+            az: opts.azimuth_deg,
+            roll: opts.roll_deg,
+            dist: opts.distance,
+            t_tilt: opts.tilt_deg,
+            t_az: opts.azimuth_deg,
+            t_roll: opts.roll_deg,
+            t_dist: opts.distance,
+            zoom: 1.0,
+            t_zoom: 1.0,
+            next: 0.0,
+        };
+        c.repick(rng, 0.0);
+        c
+    }
+
+    fn repick(&mut self, rng: &mut Rng, now: f32) {
+        self.t_tilt = (self.tilt + rng.range(-14.0, 14.0)).clamp(3.0, 27.0);
+        self.t_az = self.az + rng.range(-100.0, 100.0);
+        self.t_roll = (self.roll + rng.range(-20.0, 20.0)).clamp(-30.0, 45.0);
+        self.t_dist = (self.dist + rng.range(-1.4, 1.4)).clamp(4.6, 8.6);
+        self.t_zoom = (self.zoom + rng.range(-0.16, 0.16)).clamp(0.86, 1.18);
+        self.next = now + rng.range(4.0, 9.0);
+    }
+
+    fn advance(&mut self, rng: &mut Rng, t: f32, dt: f32) {
+        if t >= self.next {
+            self.repick(rng, t);
+        }
+        let k = 1.0 - (-dt / 4.0).exp();
+        self.tilt += (self.t_tilt - self.tilt) * k;
+        self.az += (self.t_az - self.az) * k;
+        self.roll += (self.t_roll - self.roll) * k;
+        self.dist += (self.t_dist - self.dist) * k;
+        self.zoom += (self.t_zoom - self.zoom) * k;
+    }
+}
+
 fn run(opts: Options) -> io::Result<()> {
     install_panic_hook();
     let _guard = TermGuard::enter()?;
@@ -294,6 +377,12 @@ fn run(opts: Options) -> io::Result<()> {
     let mut status: Option<(String, f32)> = None;
     let mut dims = (0usize, 0usize);
     let mut prev: Option<Vec<scene::Cell>> = None;
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x5a7);
+    let mut rng = Rng::new(seed);
+    let mut cam = Cam::new(&opts, &mut rng);
 
     'main: loop {
         let frame_start = Instant::now();
@@ -344,7 +433,9 @@ fn run(opts: Options) -> io::Result<()> {
         }
 
         if !paused {
-            t += dt * speed;
+            let sdt = dt * speed;
+            t += sdt;
+            cam.advance(&mut rng, t, sdt);
         }
 
         let (cols, rows) = terminal::size()?;
@@ -352,17 +443,12 @@ fn run(opts: Options) -> io::Result<()> {
         let cols = (cols as usize).max(4);
         let rows = (rows as usize).max(3);
 
-        // A slow, hand-held camera: it orbits the globe, opens and closes the
-        // rings like a season, and backs away a little, without ever
-        // hurrying.  Separate periods keep the path from repeating.
         let p = Params {
-            tilt: opts.tilt_deg.to_radians()
-                + TILT_DRIFT_DEG.to_radians() * (t * 0.055 + 0.8).sin(),
-            azimuth: opts.azimuth_deg.to_radians()
-                + AZIMUTH_DRIFT_DEG.to_radians() * (t * 0.045 + 1.3).sin(),
-            roll: opts.roll_deg.to_radians()
-                + ROLL_DRIFT_DEG.to_radians() * (t * 0.033 + 2.1).sin(),
-            distance: (opts.distance + DISTANCE_DRIFT * (t * 0.027 + 0.4).sin()).max(3.6),
+            tilt: cam.tilt.to_radians(),
+            azimuth: cam.az.to_radians(),
+            roll: cam.roll.to_radians(),
+            distance: cam.dist,
+            zoom: cam.zoom,
             spin: t * SPIN_RATE,
             sun: opts.sun,
             time: t,
@@ -468,6 +554,7 @@ fn snapshot(opts: &Options) -> io::Result<()> {
         azimuth: opts.azimuth_deg.to_radians(),
         roll: opts.roll_deg.to_radians(),
         distance: opts.distance,
+        zoom: opts.zoom,
         spin: opts.time * SPIN_RATE,
         sun: opts.sun,
         time: opts.time,

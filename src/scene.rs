@@ -146,6 +146,10 @@ pub struct Cell {
     pub b: u8,
     /// Index in the glyph ramp, used to damp frame-to-frame shimmer.
     pub gi: u8,
+    /// True when the cell actually contains planet or ring: temporal
+    /// smoothing and hysteresis only apply between two solid cells, so a
+    /// moving edge does not leave ghost glyphs behind it.
+    pub solid: bool,
 }
 
 pub struct Params {
@@ -166,6 +170,8 @@ pub struct Params {
     pub stars: bool,
     /// Glyph ramp, dark to bright.
     pub ramp: &'static [u8],
+    /// Framing zoom: >1 fills more of the frame.
+    pub zoom: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +215,8 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
             max_v = max_v.max((d.dot(up) / z).abs());
         }
     }
-    let tan_half = max_v.max(max_u * 2.0 * rows as f32 / cols as f32) / FRAME_FILL;
+    let tan_half =
+        max_v.max(max_u * 2.0 * rows as f32 / cols as f32) / FRAME_FILL / p.zoom.max(0.3);
     let half_w = tan_half * cols as f32 / rows as f32 * CELL_ASPECT;
 
     let mut cells = vec![Cell::default(); cols * rows];
@@ -280,10 +287,13 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
             let (mut r, mut g, mut b) = col.to_srgb8();
             // Temporal smoothing: feathers sub-cell flicker (chiefly the thin
             // ring sheet sliding across a cell) without blurring the motion.
+            let solid = covered > 0.01 || planet > 0.55;
             if let Some(pc) = prev.and_then(|p| p.get(j * cols + i)) {
-                r = ((r as u16 * 6 + pc.r as u16 * 4) / 10) as u8;
-                g = ((g as u16 * 6 + pc.g as u16 * 4) / 10) as u8;
-                b = ((b as u16 * 6 + pc.b as u16 * 4) / 10) as u8;
+                if pc.solid && solid {
+                    r = ((r as u16 * 6 + pc.r as u16 * 4) / 10) as u8;
+                    g = ((g as u16 * 6 + pc.g as u16 * 4) / 10) as u8;
+                    b = ((b as u16 * 6 + pc.b as u16 * 4) / 10) as u8;
+                }
             }
             // Only an essentially uncovered cell may draw a star, otherwise
             // stars would show up inside the planet or the ring sheet.
@@ -297,7 +307,8 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
                     b'.'
                 }
             } else {
-                let (glyph_ch, index) = glyph_with_index(r, g, b, p.ramp, prev, j * cols + i);
+                let (glyph_ch, index) =
+                    glyph_with_index(r, g, b, p.ramp, prev, j * cols + i, solid);
                 gi = index;
                 if glyph_ch == b' ' && (planet > 0.55 || covered > 0.01) {
                     b'.'
@@ -306,7 +317,14 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
                 }
             };
 
-            cells[j * cols + i] = Cell { ch, r, g, b, gi };
+            cells[j * cols + i] = Cell {
+                ch,
+                r,
+                g,
+                b,
+                gi,
+                solid,
+            };
         }
     }
 
@@ -356,6 +374,7 @@ fn glyph_with_index(
     ramp: &[u8],
     prev: Option<&[Cell]>,
     cell: usize,
+    solid: bool,
 ) -> (u8, u8) {
     let lum = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0;
     // The scene's useful range is roughly 0.04..0.86; spread it over the ramp
@@ -365,8 +384,9 @@ fn glyph_with_index(
     if let Some(prev) = prev {
         if let Some(pc) = prev.get(cell) {
             let pi = pc.gi as f32;
-            // Hysteresis: only move a glyph when the brightness really moved.
-            if (v - pi).abs() < 1.05 {
+            // Hysteresis: only move a glyph when the brightness really moved,
+            // and never carry a glyph across a solid/sky edge.
+            if solid && pc.solid && (v - pi).abs() < 1.05 {
                 index = pi as usize;
             }
         }
@@ -819,6 +839,7 @@ mod tests {
             time: 3.0,
             stars: true,
             ramp: CHARSETS[0].ramp,
+            zoom: 1.0,
         }
     }
 
@@ -879,9 +900,9 @@ mod tests {
         for cs in CHARSETS {
             assert_eq!(cs.ramp[0], b' ');
             assert!(cs.ramp.len() >= 8, "{}", cs.name);
-            assert_eq!(glyph_with_index(0, 0, 0, cs.ramp, None, 0).0, b' ');
+            assert_eq!(glyph_with_index(0, 0, 0, cs.ramp, None, 0, false).0, b' ');
             assert_eq!(
-                glyph_with_index(255, 255, 255, cs.ramp, None, 0).0,
+                glyph_with_index(255, 255, 255, cs.ramp, None, 0, false).0,
                 *cs.ramp.last().unwrap()
             );
         }
