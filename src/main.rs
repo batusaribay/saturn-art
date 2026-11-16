@@ -345,7 +345,13 @@ fn run(opts: Options) -> io::Result<()> {
                     s.push(' ');
                     continue;
                 }
-                if (c.r, c.g, c.b) != last_rgb {
+                // Reuse the current color when the next cell is within a
+                // couple of levels: imperceptible, and it saves a lot of
+                // escape bytes on smooth gradients.
+                let close = c.r.abs_diff(last_rgb.0) <= 2
+                    && c.g.abs_diff(last_rgb.1) <= 2
+                    && c.b.abs_diff(last_rgb.2) <= 2;
+                if !close {
                     let _ = write!(s, "\x1b[38;2;{};{};{}m", c.r, c.g, c.b);
                     last_rgb = (c.r, c.g, c.b);
                 }
