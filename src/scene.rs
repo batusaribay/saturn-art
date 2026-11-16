@@ -144,6 +144,8 @@ pub struct Cell {
     pub r: u8,
     pub g: u8,
     pub b: u8,
+    /// Index in the glyph ramp, used to damp frame-to-frame shimmer.
+    pub gi: u8,
 }
 
 pub struct Params {
@@ -170,7 +172,7 @@ pub struct Params {
 // main renderer
 // ---------------------------------------------------------------------------
 
-pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
+pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Vec<Cell> {
     let cols = cols.max(4);
     let rows = rows.max(3);
 
@@ -270,10 +272,18 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
             if planet > 0.55 && col.luma() < 0.012 {
                 col = Rgb::new(0.05, 0.055, 0.075);
             }
-            let (r, g, b) = col.to_srgb8();
+            let (mut r, mut g, mut b) = col.to_srgb8();
+            // Temporal smoothing: feathers sub-cell flicker (chiefly the thin
+            // ring sheet sliding across a cell) without blurring the motion.
+            if let Some(pc) = prev.and_then(|p| p.get(j * cols + i)) {
+                r = ((r as u16 * 7 + pc.r as u16 * 3) / 10) as u8;
+                g = ((g as u16 * 7 + pc.g as u16 * 3) / 10) as u8;
+                b = ((b as u16 * 7 + pc.b as u16 * 3) / 10) as u8;
+            }
             // Only an essentially uncovered cell may draw a star, otherwise
             // stars would show up inside the planet or the ring sheet.
             let is_star = bg.luma() > 0.0 && covered < 0.03;
+            let mut gi = 0u8;
             let ch = if is_star {
                 if (r as u32 + g as u32 + b as u32) > 520 {
                     b'+'
@@ -281,15 +291,16 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
                     b'.'
                 }
             } else {
-                let g = glyph(r, g, b, p.ramp);
-                if g == b' ' && (planet > 0.55 || covered > 0.18) {
+                let (glyph_ch, index) = glyph_with_index(r, g, b, p.ramp, prev, j * cols + i);
+                gi = index;
+                if glyph_ch == b' ' && (planet > 0.55 || covered > 0.18) {
                     b'.'
                 } else {
-                    g
+                    glyph_ch
                 }
             };
 
-            cells[j * cols + i] = Cell { ch, r, g, b };
+            cells[j * cols + i] = Cell { ch, r, g, b, gi };
         }
     }
 
@@ -323,12 +334,34 @@ fn shade_ray(o: V3, dir: V3, spin: f32, sun: V3, time: f32, bg: Rgb) -> (Rgb, f3
 
 /// Pick an ASCII glyph for an sRGB color.
 #[inline]
-fn glyph(r: u8, g: u8, b: u8, ramp: &[u8]) -> u8 {
+/// Pick a glyph (and its ramp index) for an sRGB colour.  When the previous
+/// frame is available, keep the old index as long as the new one is within a
+/// fraction of a step, which stops cells that sit on a threshold from
+/// flickering every frame.
+fn glyph_with_index(
+    r: u8,
+    g: u8,
+    b: u8,
+    ramp: &[u8],
+    prev: Option<&[Cell]>,
+    cell: usize,
+) -> (u8, u8) {
     let lum = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0;
     // The scene's useful range is roughly 0.04..0.86; spread it over the ramp
     // so the lit belts reach the dense glyphs without blowing out to white.
     let v = ((lum - 0.045) / 0.86).clamp(0.0, 1.0).powf(0.85) * (ramp.len() - 1) as f32;
-    ramp[(v.round() as usize).min(ramp.len() - 1)]
+    let mut index = v.round() as usize;
+    if let Some(prev) = prev {
+        if let Some(pc) = prev.get(cell) {
+            let pi = pc.gi as f32;
+            // Hysteresis: only move a glyph when the brightness really moved.
+            if (v - pi).abs() < 0.85 {
+                index = pi as usize;
+            }
+        }
+    }
+    let index = index.min(ramp.len() - 1);
+    (ramp[index], index as u8)
 }
 
 // ---------------------------------------------------------------------------
@@ -386,7 +419,7 @@ fn ring_hit(o: V3, d: V3, sun: V3, time: f32) -> Option<(f32, f32, Rgb)> {
     // Ring particles orbit at Keplerian rates: the inner rings sweep faster
     // than the outer ones, so the brightness pattern shears around the disc.
     let ang = q.z.atan2(q.x);
-    let omega = 0.38 * (1.55 / radius).powf(1.5);
+    let omega = 0.18 * (1.55 / radius).powf(1.5);
     let phase = ang + omega * time;
     // A large-scale brightness asymmetry (plus a finer ripple) makes the
     // ring's rotation readable even when the disc is nearly edge-on.
@@ -395,8 +428,8 @@ fn ring_hit(o: V3, d: V3, sun: V3, time: f32) -> Option<(f32, f32, Rgb)> {
 
     // Two dark spokes sweep around the ring plane, the way Voyager's did.
     let spoke = 1.0
-        - 0.42 * (-(wrap_pi(phase) / 0.26).powi(2)).exp()
-        - 0.26 * (-(wrap_pi(phase + 2.4) / 0.17).powi(2)).exp();
+        - 0.22 * (-(wrap_pi(phase) / 0.30).powi(2)).exp()
+        - 0.14 * (-(wrap_pi(phase + 2.4) / 0.20).powi(2)).exp();
 
     Some((t, alpha, tone.mul(light * shadow * wave * spoke)))
 }
@@ -780,7 +813,7 @@ mod tests {
     fn renders_at_any_size() {
         let p = params();
         for (c, r) in [(1, 1), (4, 3), (8, 6), (80, 24), (200, 60)] {
-            let cells = render(c, r, &p);
+            let cells = render(c, r, &p, None);
             assert_eq!(cells.len(), c.max(4) * r.max(3));
         }
     }
@@ -823,8 +856,11 @@ mod tests {
         for cs in CHARSETS {
             assert_eq!(cs.ramp[0], b' ');
             assert!(cs.ramp.len() >= 8, "{}", cs.name);
-            assert_eq!(glyph(0, 0, 0, cs.ramp), b' ');
-            assert_eq!(glyph(255, 255, 255, cs.ramp), *cs.ramp.last().unwrap());
+            assert_eq!(glyph_with_index(0, 0, 0, cs.ramp, None, 0).0, b' ');
+            assert_eq!(
+                glyph_with_index(255, 255, 255, cs.ramp, None, 0).0,
+                *cs.ramp.last().unwrap()
+            );
         }
         assert_eq!(CHARSETS[0].name, "classic");
     }

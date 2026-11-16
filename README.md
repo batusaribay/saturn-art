@@ -31,10 +31,10 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 ## How it works
 
 1. The camera is a real perspective camera on an angled orbit, tipped up to
-   the right by a 12 degree roll and placed 10 degrees above the ring plane,
+   the right by a 12 degree roll and placed 11 degrees above the ring plane,
    so the rings read as a bright blade and the near ansa is noticeably larger
-   than the far one. Over about two minutes it opens the rings to 16 degrees
-   and closes them to 4, lingering at both ends.
+   than the far one. It is deliberately parked: a drifting camera slides the
+   razor-thin ring edges across character cells and makes the picture shimmer.
 2. Each character cell casts four to nine rays, depending on the terminal
    size, and composites what they hit. This is what keeps the rings from
    flickering and dropping out at the ansae.
@@ -67,7 +67,7 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 
 | View | Look |
 | --- | --- |
-| `saturn-art` | Rings tipped up to the right; the camera slowly opens and closes them (default). |
+| `saturn-art` | Rings tipped up to the right and open enough to read (default). |
 | `saturn-art --view classic` | Straight-on postcard, rings open, no roll. |
 | `saturn-art --view dramatic` | Angled and rolled, near rings larger. |
 | `saturn-art --view closeup` | Low camera, strong perspective, rings wrap the globe. |

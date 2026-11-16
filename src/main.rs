@@ -32,7 +32,7 @@ const SPIN_RATE: f32 = 0.22; // radians / second, ~29 s per rotation
 // camera so the globe stays bright and peachy.  The live camera slowly opens
 // and closes the rings around this elevation.
 const BASE_TILT_DEG: f32 = 10.0;
-const TILT_SWING_DEG: f32 = 6.0;
+const TILT_SWING_DEG: f32 = 0.0;
 const TILT_RATE: f32 = 0.052; // ~2 minute cycle
 const BASE_AZIMUTH_DEG: f32 = 10.0;
 const BASE_ROLL_DEG: f32 = 12.0;
@@ -212,7 +212,7 @@ Options
   --charset NAME   glyph ramp (see Charsets)           (classic)
   --fps N          animation frame rate, 5..120       (30)
   --speed X        time multiplier                    (1.0)
-  --tilt DEG       camera elevation, -85..85 deg      (10)
+  --tilt DEG       camera elevation, -85..85 deg      (11)
   --azimuth DEG    camera angle around the planet     (10)
   --roll DEG       camera roll around its axis        (12)
   --dist R         camera distance in planet radii    (6.5)
@@ -291,6 +291,7 @@ fn run(opts: Options) -> io::Result<()> {
     let mut charset = opts.charset;
     let mut status: Option<(String, f32)> = None;
     let mut dims = (0usize, 0usize);
+    let mut prev: Option<Vec<scene::Cell>> = None;
 
     'main: loop {
         let frame_start = Instant::now();
@@ -351,7 +352,7 @@ fn run(opts: Options) -> io::Result<()> {
 
         let p = Params {
             tilt: opts.tilt_deg.to_radians() + TILT_SWING_DEG.to_radians() * (t * TILT_RATE).sin(),
-            azimuth: opts.azimuth_deg.to_radians() + 0.055 * (t * 0.07 + 1.0).sin(),
+            azimuth: opts.azimuth_deg.to_radians(),
             roll: opts.roll_deg.to_radians(),
             distance: opts.distance,
             spin: t * SPIN_RATE,
@@ -360,7 +361,11 @@ fn run(opts: Options) -> io::Result<()> {
             stars,
             ramp: CHARSETS[charset].ramp,
         };
-        let cells = scene::render(cols, rows, &p);
+        // Reuse the previous frame's glyphs as hysteresis, but only when the
+        // terminal geometry is unchanged.
+        let prev_ref = prev.as_deref().filter(|_| dims == (cols, rows));
+        let cells = scene::render(cols, rows, &p, prev_ref);
+        prev = Some(cells.clone());
 
         let mut s = String::with_capacity(cols * rows * 8 + 64);
         let mut last_rgb = (0u8, 0u8, 0u8);
@@ -462,7 +467,7 @@ fn snapshot(opts: &Options) -> io::Result<()> {
         stars: opts.stars,
         ramp: CHARSETS[opts.charset].ramp,
     };
-    let cells = scene::render(opts.cols, opts.rows, &p);
+    let cells = scene::render(opts.cols, opts.rows, &p, None);
 
     if opts.ascii {
         let mut s = String::new();
