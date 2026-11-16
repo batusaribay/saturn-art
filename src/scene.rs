@@ -146,6 +146,8 @@ pub struct Cell {
     pub b: u8,
     /// Index in the glyph ramp, used to damp frame-to-frame shimmer.
     pub gi: u8,
+    /// True for a star: those cells keep a black background.
+    pub star: bool,
 }
 
 pub struct Params {
@@ -272,6 +274,11 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
             if planet > 0.55 && col.luma() < 0.012 {
                 col = Rgb::new(0.05, 0.055, 0.075);
             }
+            // A cell that caught even a sliver of the ring should not fall back
+            // to pure background: that is what reads as a black dot in the ring.
+            if covered > 0.01 && col.luma() < 0.03 {
+                col = col.add(Rgb::new(0.014, 0.013, 0.012));
+            }
             let (mut r, mut g, mut b) = col.to_srgb8();
             // Temporal smoothing: feathers sub-cell flicker (chiefly the thin
             // ring sheet sliding across a cell) without blurring the motion.
@@ -293,14 +300,21 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
             } else {
                 let (glyph_ch, index) = glyph_with_index(r, g, b, p.ramp, prev, j * cols + i);
                 gi = index;
-                if glyph_ch == b' ' && (planet > 0.55 || covered > 0.18) {
+                if glyph_ch == b' ' && (planet > 0.55 || covered > 0.01) {
                     b'.'
                 } else {
                     glyph_ch
                 }
             };
 
-            cells[j * cols + i] = Cell { ch, r, g, b, gi };
+            cells[j * cols + i] = Cell {
+                ch,
+                r,
+                g,
+                b,
+                gi,
+                star: is_star,
+            };
         }
     }
 
@@ -483,7 +497,7 @@ fn shade_planet(p: V3, d: V3, spin: f32, sun: V3) -> Rgb {
     let albedo = surface(lat, lon);
 
     // Solar illumination, with a softer-than-real terminator for readability.
-    let ndl = n.dot(sun);
+    let ndl = n.dot(sun).clamp(-1.0, 1.0);
     let diff = smoothstep(-0.02, 0.11, ndl);
     let lambert = 0.34 + 0.66 * ndl.max(0.0);
     let mut light = (0.020 + 0.980 * diff) * lambert * 0.94;
@@ -495,7 +509,9 @@ fn shade_planet(p: V3, d: V3, spin: f32, sun: V3) -> Rgb {
     light *= 1.0 - 0.72 * shadow * smoothstep(0.03, 0.16, sun.y.abs());
 
     // Limb darkening + a pale atmospheric rim on the sunlit edge.
-    let ndv = n.dot(d.mul(-1.0)).max(0.0);
+    // Clamp: at the exact centre of the disc the dot product can round to
+    // slightly over 1, and a negative base with a fractional pow is NaN.
+    let ndv = n.dot(d.mul(-1.0)).clamp(0.0, 1.0);
     let limb = 0.56 + 0.44 * ndv.powf(0.50);
     let rim = (1.0 - ndv).powf(2.8) * 0.09 * smoothstep(0.0, 0.12, ndl);
 
@@ -609,12 +625,12 @@ fn surface(lat: f32, lon: f32) -> Rgb {
         + 0.20 * oval(lat, lon, -0.38, -0.60, 0.22, 0.40)
         + 0.16 * oval(lat, lon, -0.56, 2.20, 0.16, 0.26)
         + 0.16 * oval(lat, lon, -0.12, 2.60, 0.15, 0.24);
-    let dark = 0.40 * oval(lat, lon, -0.30, 0.90, 0.16, 0.34)
-        + 0.24 * oval(lat, lon, 0.20, 3.05, 0.12, 0.22)
-        + 0.16 * oval(lat, lon, 0.52, -1.55, 0.10, 0.18);
+    let dark = 0.28 * oval(lat, lon, -0.30, 0.90, 0.16, 0.34)
+        + 0.17 * oval(lat, lon, 0.20, 3.05, 0.12, 0.22)
+        + 0.11 * oval(lat, lon, 0.52, -1.55, 0.10, 0.18);
 
     const STORM_LIGHT: Rgb = Rgb::new(0.88, 0.80, 0.64);
-    const STORM_DARK: Rgb = Rgb::new(0.085, 0.058, 0.030);
+    const STORM_DARK: Rgb = Rgb::new(0.17, 0.12, 0.075);
 
     c.lerp(STORM_LIGHT, white.clamp(0.0, 0.75))
         .lerp(STORM_DARK, dark.clamp(0.0, 0.65))
@@ -849,6 +865,16 @@ mod tests {
         assert!(sphere_occlusion(behind, sun) > 0.5);
         // a point on the sunward side is lit
         assert_eq!(sphere_occlusion(V3::new(-1.4, 0.0, 0.6), sun), 0.0);
+    }
+
+    #[test]
+    fn centre_of_disc_is_finite() {
+        let p = V3::new(0.1706, 0.1908, -0.9683).norm();
+        let d = p.mul(-1.0);
+        let sun = V3::new(-0.18, 0.03, -0.983).norm();
+        let c = shade_planet(p, d, 0.22, sun);
+        assert!(c.r.is_finite() && c.g.is_finite() && c.b.is_finite());
+        assert!(c.luma() > 0.2);
     }
 
     #[test]

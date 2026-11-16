@@ -367,25 +367,48 @@ fn run(opts: Options) -> io::Result<()> {
         let cells = scene::render(cols, rows, &p, prev_ref);
         prev = Some(cells.clone());
 
-        let mut s = String::with_capacity(cols * rows * 8 + 64);
+        let mut s = String::with_capacity(cols * rows * 12 + 64);
         let mut last_rgb = (0u8, 0u8, 0u8);
+        let mut last_bg = (0u8, 0u8, 0u8);
         if dims != (cols, rows) {
             // New geometry: wipe whatever the previous layout left behind,
             // and make sure the cursor stays hidden after a window change.
             s.push_str("\x1b[2J");
             dims = (cols, rows);
         }
-        s.push_str("\x1b[?25l\x1b[1;1H");
+        // Paint the sky black instead of the terminal theme, and fill the
+        // background behind lit cells so the gaps between glyphs do not read
+        // as black dots.
+        s.push_str("\x1b[48;2;0;0;0m\x1b[?25l\x1b[1;1H");
         for j in 0..rows {
             if j > 0 {
                 let _ = write!(s, "\x1b[{};1H", j + 1);
             }
             for i in 0..cols {
                 let c = cells[j * cols + i];
-                // Spaces need no escape sequence at all.
                 if c.ch == b' ' {
+                    if last_bg != (0, 0, 0) {
+                        s.push_str("\x1b[48;2;0;0;0m");
+                        last_bg = (0, 0, 0);
+                    }
                     s.push(' ');
                     continue;
+                }
+                // Dim version of the cell colour behind the glyph.  Quantised
+                // so smooth gradients do not emit an escape per cell.
+                let lum = (c.r as u32 + c.g as u32 + c.b as u32) / 3;
+                let bg = if !c.star && lum > 48 {
+                    (
+                        ((c.r as u16 * 38 / 100) & 0xf8) as u8,
+                        ((c.g as u16 * 38 / 100) & 0xf8) as u8,
+                        ((c.b as u16 * 38 / 100) & 0xf8) as u8,
+                    )
+                } else {
+                    (0, 0, 0)
+                };
+                if bg != last_bg {
+                    let _ = write!(s, "\x1b[48;2;{};{};{}m", bg.0, bg.1, bg.2);
+                    last_bg = bg;
                 }
                 // Reuse the current color when the next cell is within a
                 // couple of levels: imperceptible, and it saves a lot of
@@ -411,7 +434,7 @@ fn run(opts: Options) -> io::Result<()> {
         }
 
         if hint {
-            let _ = write!(s, "\x1b[{};1H\x1b[38;2;104;104;116m", rows);
+            let _ = write!(s, "\x1b[{};1H\x1b[48;2;0;0;0m\x1b[38;2;104;104;116m", rows);
             let mut text = String::from("saturn-art");
             if paused {
                 text.push_str("   paused");
