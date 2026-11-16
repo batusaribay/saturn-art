@@ -290,7 +290,8 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
             let is_star = bg.luma() > 0.0 && covered < 0.03;
             let mut gi = 0u8;
             let ch = if is_star {
-                if (r as u32 + g as u32 + b as u32) > 520 {
+                // Stars are dots; only a rare few get the brighter glyph.
+                if (h2_of(i, j) >> 24) % 24 == 0 {
                     b'+'
                 } else {
                     b'.'
@@ -335,6 +336,11 @@ fn shade_ray(o: V3, dir: V3, spin: f32, sun: V3, time: f32, bg: Rgb) -> (Rgb, f3
             None => (bg, 0.0, false),
         },
     }
+}
+
+#[inline]
+fn h2_of(col: usize, row: usize) -> u32 {
+    hash2(col as u32 ^ 0x9e37, row as u32 ^ 0x85eb)
 }
 
 /// Pick an ASCII glyph for an sRGB color.

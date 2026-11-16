@@ -27,7 +27,7 @@ mod scene;
 
 use scene::{CHARSETS, Params, V3};
 
-const SPIN_RATE: f32 = 0.22; // radians / second, ~29 s per rotation
+const SPIN_RATE: f32 = 0.30; // radians / second, ~21 s per rotation
 // Default view: rings tipped up to the right, with the sun nearly behind the
 // camera so the globe stays bright and peachy.  The live camera slowly opens
 // and closes the rings around this elevation.
@@ -353,7 +353,7 @@ fn run(opts: Options) -> io::Result<()> {
         let p = Params {
             tilt: opts.tilt_deg.to_radians() + TILT_SWING_DEG.to_radians() * (t * TILT_RATE).sin(),
             azimuth: opts.azimuth_deg.to_radians(),
-            roll: opts.roll_deg.to_radians(),
+            roll: opts.roll_deg.to_radians() + 0.05 * (t * 0.027 + 2.1).sin(),
             distance: opts.distance,
             spin: t * SPIN_RATE,
             sun: opts.sun,

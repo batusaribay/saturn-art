@@ -1,7 +1,5 @@
 # saturn-art
 
-A live, ray-traced Saturn spinning in colored ASCII art
-
 ![saturn-art in a terminal](demo.gif)
 
 The GIF above is a compressed preview. It looks much better in a real terminal,
@@ -33,8 +31,10 @@ camera, change the ring opening, or watch a storm rotate without any new art.
 1. The camera is a real perspective camera on an angled orbit, tipped up to
    the right by a 12 degree roll and placed 11 degrees above the ring plane,
    so the rings read as a bright blade and the near ansa is noticeably larger
-   than the far one. It is deliberately parked: a drifting camera slides the
-   razor-thin ring edges across character cells and makes the picture shimmer.
+   than the far one. It drifts slowly around the planet like a hand-held
+   camera in orbit, changing the phase and the ring opening over a minute or
+   two, while glyph hysteresis and temporal smoothing keep the razor-thin
+   ring edges from shimmering.
 2. Each character cell casts four to nine rays, depending on the terminal
    size, and composites what they hit. This is what keeps the rings from
    flickering and dropping out at the ansae.
@@ -139,7 +139,7 @@ cargo uninstall saturn-art
 
 ## Notes
 
-- The default spin is about 29 seconds per rotation. Saturn really takes 10.7
+- The default spin is about 21 seconds per rotation. Saturn really takes 10.7
   hours; this is a screen-saver pace with the same direction and differential
   ring motion. `--speed` goes from 0.05x to 8x.
 - Ring thickness is a physical lie: the real rings are tens of meters thick.
