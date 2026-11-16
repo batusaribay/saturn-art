@@ -29,6 +29,12 @@ impl Rgb {
         Self::new(self.r * k, self.g * k, self.b * k)
     }
 
+    /// Component-wise product (albedo * light).
+    #[inline]
+    pub fn mul_rgb(self, o: Rgb) -> Self {
+        Self::new(self.r * o.r, self.g * o.g, self.b * o.b)
+    }
+
     #[inline]
     pub fn add(self, o: Rgb) -> Self {
         Self::new(self.r + o.r, self.g + o.g, self.b + o.b)

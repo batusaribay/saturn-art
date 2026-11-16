@@ -27,10 +27,11 @@ mod scene;
 
 use scene::{Params, V3};
 
-const SPIN_RATE: f32 = 0.26; // radians / second, ~24 s per rotation
-const BASE_TILT_DEG: f32 = 30.0;
-const BASE_AZIMUTH_DEG: f32 = 22.0;
-const CAMERA_DISTANCE: f32 = 7.0;
+const SPIN_RATE: f32 = 0.60; // radians / second, ~11 s per rotation
+const BASE_TILT_DEG: f32 = 27.0;
+const BASE_AZIMUTH_DEG: f32 = 26.0;
+const BASE_ROLL_DEG: f32 = -14.0;
+const CAMERA_DISTANCE: f32 = 6.0;
 const SUN: V3 = V3::new(-0.48, 0.44, -0.76);
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,7 @@ struct Options {
     speed: f32,
     tilt_deg: f32,
     azimuth_deg: f32,
+    roll_deg: f32,
     distance: f32,
     stars: bool,
     snapshot: Option<String>,
@@ -58,6 +60,7 @@ impl Default for Options {
             speed: 1.0,
             tilt_deg: BASE_TILT_DEG,
             azimuth_deg: BASE_AZIMUTH_DEG,
+            roll_deg: BASE_ROLL_DEG,
             distance: CAMERA_DISTANCE,
             stars: true,
             snapshot: None,
@@ -110,6 +113,10 @@ fn parse_args() -> Result<Options, String> {
                 o.azimuth_deg = next("--azimuth")?.parse().map_err(|_| "bad --azimuth")?;
                 o.azimuth_deg = o.azimuth_deg.clamp(-360.0, 360.0);
             }
+            "--roll" => {
+                o.roll_deg = next("--roll")?.parse().map_err(|_| "bad --roll")?;
+                o.roll_deg = o.roll_deg.clamp(-180.0, 180.0);
+            }
             "--dist" => {
                 o.distance = next("--dist")?.parse().map_err(|_| "bad --dist")?;
                 o.distance = o.distance.clamp(3.6, 60.0);
@@ -147,9 +154,10 @@ USAGE
 OPTIONS
   --fps N          animation frame rate, 5..120       (30)
   --speed X        time multiplier                    (1.0)
-  --tilt DEG       camera elevation, -85..85 deg      (30)
-  --azimuth DEG    camera angle around the planet     (22)
-  --dist R         camera distance in planet radii    (7.0)
+  --tilt DEG       camera elevation, -85..85 deg      (27)
+  --azimuth DEG    camera angle around the planet     (26)
+  --roll DEG       camera roll around its axis        (-14)
+  --dist R         camera distance in planet radii    (6.0)
                     (smaller = stronger perspective)
   --no-stars       no star field
   --snapshot PATH  render a single frame and exit
@@ -264,6 +272,7 @@ fn run(opts: Options) -> io::Result<()> {
         let p = Params {
             tilt: opts.tilt_deg.to_radians() + 0.035 * (t * 0.09).sin(),
             azimuth: opts.azimuth_deg.to_radians() + 0.055 * (t * 0.07 + 1.0).sin(),
+            roll: opts.roll_deg.to_radians(),
             distance: opts.distance,
             spin: t * SPIN_RATE,
             sun: SUN,
@@ -341,6 +350,7 @@ fn snapshot(opts: &Options) -> io::Result<()> {
     let p = Params {
         tilt: opts.tilt_deg.to_radians(),
         azimuth: opts.azimuth_deg.to_radians(),
+        roll: opts.roll_deg.to_radians(),
         distance: opts.distance,
         spin: opts.time * SPIN_RATE,
         sun: SUN,

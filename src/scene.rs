@@ -86,7 +86,7 @@ impl V3 {
 pub const RING_OUTER: f32 = 2.272;
 
 /// How much of the frame the ring system may fill.
-const FRAME_FILL: f32 = 0.78;
+const FRAME_FILL: f32 = 0.85;
 
 const UP: V3 = V3::new(0.0, 1.0, 0.0);
 
@@ -113,6 +113,8 @@ pub struct Params {
     pub tilt: f32,
     /// Azimuth of the camera around the planet, in radians.
     pub azimuth: f32,
+    /// Roll of the camera around its own axis, in radians.
+    pub roll: f32,
     /// Camera distance in planet radii (drives the perspective).
     pub distance: f32,
     /// Planet rotation angle, in radians.
@@ -139,8 +141,12 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
     let (sa, ca) = p.azimuth.sin_cos();
     let cam = V3::new(dist * sa * ce, dist * se, -dist * ca * ce);
     let fwd = cam.mul(-1.0).norm();
-    let right = UP.cross(fwd).norm();
-    let up = fwd.cross(right).norm();
+    let right0 = UP.cross(fwd).norm();
+    let up0 = fwd.cross(right0).norm();
+    // Roll the camera so the rings cut diagonally across the frame.
+    let (sr, cr) = p.roll.sin_cos();
+    let right = right0.mul(cr).add(up0.mul(sr));
+    let up = up0.mul(cr).sub(right0.mul(sr));
     let sun = p.sun.norm();
 
     // Auto-frame: project the outer ring circle and the planet's silhouette,
@@ -191,8 +197,16 @@ pub fn render(cols: usize, rows: usize, p: &Params) -> Vec<Cell> {
                 covered += cov;
             }
 
-            let col = acc.mul(0.25);
+            let mut col = acc.mul(0.25);
             covered *= 0.25;
+
+            // Thin sub-cell features (the rings at the ansae) would otherwise
+            // average away into the background.  Recover some of their
+            // brightness so they still render as glyphs.
+            if covered > 0.04 && covered < 1.0 {
+                let boost = (1.0 / covered).powf(0.40).min(1.85);
+                col = col.mul(boost);
+            }
 
             let (r, g, b) = col.to_srgb8();
             let is_star = bg.luma() > 0.0 && covered < 0.4;
@@ -244,7 +258,7 @@ fn glyph(r: u8, g: u8, b: u8) -> u8 {
     let lum = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0;
     // The scene's useful range is roughly 0.04..0.86; spread it over the ramp
     // so the lit belts reach the dense glyphs without blowing out to white.
-    let v = ((lum - 0.04) / 0.82).clamp(0.0, 1.0).powf(0.85) * (RAMP.len() - 1) as f32;
+    let v = ((lum - 0.045) / 0.86).clamp(0.0, 1.0).powf(0.85) * (RAMP.len() - 1) as f32;
     RAMP[(v.round() as usize).min(RAMP.len() - 1)]
 }
 
@@ -359,7 +373,7 @@ fn shade_planet(p: V3, d: V3, spin: f32, sun: V3) -> Rgb {
     let ndl = n.dot(sun);
     let diff = smoothstep(-0.02, 0.11, ndl);
     let lambert = 0.34 + 0.66 * ndl.max(0.0);
-    let mut light = (0.042 + 0.958 * diff) * lambert * 0.94;
+    let mut light = (0.020 + 0.980 * diff) * lambert * 0.94;
 
     // Rings throw a shadow band onto the planet.
     let shadow = ring_shadow_on_planet(p, sun);
@@ -374,8 +388,13 @@ fn shade_planet(p: V3, d: V3, spin: f32, sun: V3) -> Rgb {
     let grey = Rgb::new(albedo.luma(), albedo.luma(), albedo.luma());
     let albedo = albedo.lerp(grey, 0.06);
 
+    // Dusk light: a little ringshine keeps the night side readable, which is
+    // what preserves the sphere's silhouette in ASCII.
+    const DUSK: Rgb = Rgb::new(0.055, 0.060, 0.080);
+
     albedo
         .mul(light * limb)
+        .add(albedo.mul_rgb(DUSK))
         .add(Rgb::new(0.86, 0.79, 0.63).mul(rim))
 }
 
@@ -392,22 +411,22 @@ const BANDS_HEX: &[(f32, u32)] = &[
     (-66.0, 0xb09872),
     (-58.0, 0xc4ac82),
     (-50.0, 0xaa8c5a),
-    (-42.0, 0xd4ba8b),
-    (-34.0, 0xdcc495),
+    (-42.0, 0xcdb183),
+    (-34.0, 0xd5bc8c),
     (-27.0, 0xbb9c63),
     (-20.0, 0xccb281),
-    (-13.0, 0xe0ca9e),
-    (-6.0, 0xe8d6ac),
-    (1.0, 0xe6d2a8),
-    (8.0, 0xdac394),
+    (-13.0, 0xd9c193),
+    (-6.0, 0xe0cba0),
+    (1.0, 0xdec99c),
+    (8.0, 0xd2b98a),
     (14.0, 0xbb985b),
     (20.0, 0xc8ad7a),
-    (27.0, 0xdcc69a),
+    (27.0, 0xd4bd8e),
     (34.0, 0xc0a87c),
     (41.0, 0xb0996b),
-    (48.0, 0xd0ba90),
+    (48.0, 0xc8b184),
     (55.0, 0xb8a37c),
-    (62.0, 0xcdb98e),
+    (62.0, 0xc5b082),
     (70.0, 0xb3a586),
     (77.0, 0xc0b49a),
     (83.0, 0xa8a795),
@@ -444,37 +463,43 @@ fn band_color(lat_deg: f32) -> Rgb {
 
 /// Full atmosphere albedo for a surface point.
 fn surface(lat: f32, lon: f32) -> Rgb {
-    // Saturn's jet streams meander, so the band boundaries are not perfect
-    // circles.  This latitude ripple is what makes the rotation legible.
+    // Meandering jets: wavy band boundaries that sweep with the rotation.
     let lat_band = lat
-        + 0.085 * (lon * 2.0 + 0.9 * (lat * 5.0).sin()).sin()
-        + 0.038 * (lon * 5.0 - 1.3 * (lat * 3.0).sin()).sin();
-    let c = band_color(lat_band.to_degrees());
+        + 0.130 * (lon * 2.0 + 0.9 * (lat * 5.0).sin()).sin()
+        + 0.055 * (lon * 5.0 - 1.3 * (lat * 3.0).sin()).sin();
+    let base = band_color(lat_band.to_degrees());
 
-    // Fine zonal banding: Saturn's belts are full of thin ribbons.
+    // Fine ribbons and convective swirls.
     let mut k = 1.0_f32;
     k += 0.020 * (lat * 27.0 + 1.1 * (lon * 3.0).sin()).sin();
     k += 0.010 * (lat * 64.0 + 1.8 * (lon * 2.0 + 0.7).sin()).sin();
     k += 0.005 * (lat * 141.0).sin();
+    k += 0.022 * (lon * 6.0 + 2.2 * (lat * 8.0).sin()).sin() * (lat * 2.2).cos();
+    k += 0.012 * (lon * 13.0 - 1.5 * (lat * 5.0).sin()).sin() * (lat * 3.0).cos();
+    k += 0.060 * (lon + 0.9 * (lat * 3.0).sin()).sin()
+        + 0.035 * (lon * 2.0 - 0.6).sin() * (lat * 2.0).cos();
+    // Large bright/dark sectors near the equator.
+    k += 0.22 * (lon * 3.0 + 0.6).sin() * (1.0 - (lat / 0.5).powi(2)).max(0.0);
 
-    // Convective swirls drifting along the bands.
-    k += 0.020 * (lon * 6.0 + 2.2 * (lat * 8.0).sin()).sin() * (lat * 2.2).cos();
-    k += 0.011 * (lon * 13.0 - 1.5 * (lat * 5.0).sin()).sin() * (lat * 3.0).cos();
+    let c = base.mul(k.clamp(0.65, 1.45));
 
-    // Storm ovals and dark barges drifting with the rotation.  The big white
-    // oval is a Great White Spot-style outbreak, ~30 degrees of longitude.
-    k += 0.26 * oval(lat, lon, 0.40, 1.30, 0.26, 0.50);
-    k += 0.20 * oval(lat, lon, 0.28, -2.10, 0.20, 0.32);
-    k += 0.16 * oval(lat, lon, 0.60, 0.55, 0.16, 0.26);
-    k += 0.16 * oval(lat, lon, -0.38, -0.60, 0.21, 0.38);
-    k += 0.13 * oval(lat, lon, -0.56, 2.20, 0.16, 0.26);
-    k += 0.13 * oval(lat, lon, -0.12, 2.60, 0.15, 0.24);
-    k += 0.12 * oval(lat, lon, -0.02, 0.10, 0.13, 0.20);
-    k -= 0.09 * oval(lat, lon, -0.31, 0.90, 0.050, 0.22);
-    k -= 0.08 * oval(lat, lon, 0.20, 3.05, 0.030, 0.10);
-    k -= 0.06 * oval(lat, lon, 0.52, -1.55, 0.025, 0.08);
+    // Storms: bright white ovals and dark barges.  These are the features a
+    // viewer can actually track as the planet turns.
+    let white = 0.34 * oval(lat, lon, 0.40, 1.30, 0.28, 0.55)
+        + 0.26 * oval(lat, lon, 0.28, -2.10, 0.20, 0.32)
+        + 0.20 * oval(lat, lon, 0.60, 0.55, 0.16, 0.26)
+        + 0.20 * oval(lat, lon, -0.38, -0.60, 0.22, 0.40)
+        + 0.16 * oval(lat, lon, -0.56, 2.20, 0.16, 0.26)
+        + 0.16 * oval(lat, lon, -0.12, 2.60, 0.15, 0.24);
+    let dark = 0.40 * oval(lat, lon, -0.30, 0.90, 0.16, 0.34)
+        + 0.24 * oval(lat, lon, 0.20, 3.05, 0.12, 0.22)
+        + 0.16 * oval(lat, lon, 0.52, -1.55, 0.10, 0.18);
 
-    c.mul(k.clamp(0.62, 1.55))
+    const STORM_LIGHT: Rgb = Rgb::new(0.88, 0.80, 0.64);
+    const STORM_DARK: Rgb = Rgb::new(0.085, 0.058, 0.030);
+
+    c.lerp(STORM_LIGHT, white.clamp(0.0, 0.75))
+        .lerp(STORM_DARK, dark.clamp(0.0, 0.65))
 }
 
 #[inline]
@@ -515,19 +540,19 @@ struct RingSeg {
 
 const RINGS_HEX: &[(f32, f32, f32, u32)] = &[
     // D ring: faint, dusty
-    (1.105, 1.236, 0.110, 0x4e4638),
+    (1.105, 1.236, 0.180, 0x4e4638),
     // C ring: translucent, grayish tan
-    (1.236, 1.530, 0.56, 0x8e8169),
+    (1.236, 1.530, 0.64, 0x877f6d),
     // B ring: the bright, dense one
-    (1.530, 1.952, 0.95, 0xd2bf98),
+    (1.530, 1.952, 0.95, 0xd2c9b6),
     // Cassini Division
     (1.952, 2.030, 0.045, 0x3f3a30),
     // A ring
-    (2.030, 2.212, 0.80, 0xbcaa86),
+    (2.030, 2.212, 0.80, 0xbfb6a3),
     // Encke Gap
     (2.212, 2.227, 0.035, 0x3f3a30),
     // outer A ring
-    (2.227, 2.272, 0.66, 0xb4a37f),
+    (2.227, 2.272, 0.66, 0xb7ae9a),
 ];
 
 fn ring_table() -> &'static [RingSeg] {
@@ -654,6 +679,7 @@ mod tests {
         Params {
             tilt: 26.0_f32.to_radians(),
             azimuth: 18.0_f32.to_radians(),
+            roll: 0.0,
             distance: 9.0,
             spin: 0.7,
             sun: V3::new(-0.58, 0.46, -0.67).norm(),

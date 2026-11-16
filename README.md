@@ -48,9 +48,10 @@ Options:
 ```
 --fps N          frame rate, 5..120     (30)
 --speed X        time multiplier        (1.0)
---tilt DEG       camera elevation       (30)
---azimuth DEG    camera angle around    (22)
---dist R         camera distance        (7.0, smaller = more perspective)
+--tilt DEG       camera elevation       (27)
+--azimuth DEG    camera angle around    (26)
+--roll DEG       camera roll            (-14)
+--dist R         camera distance        (6.0, smaller = more perspective)
 --no-stars       no star field
 ```
 
@@ -64,10 +65,10 @@ saturn-art --snapshot - > saturn.ppm                    # PPM on stdout
 
 ## What is actually being rendered
 
-* **Camera** — a real perspective camera (7 planet radii away) orbiting at a
-  30° elevation and 22° azimuth, so the rings show their near/far asymmetry
-  instead of looking flat. It slowly drifts, and the whole ring system is
-  auto-framed with a margin.
+* **Camera** — a real perspective camera (6 planet radii away) at a 27°
+  elevation, 26° azimuth and a -14° roll, so the rings cut diagonally and
+  show their near/far asymmetry instead of looking flat. It slowly drifts,
+  and the whole ring system is auto-framed with a margin.
 * **Planet** — one ray/sphere intersection per sample. The texture is
   looked up in latitude/longitude, with a 27-stop palette of Saturn's warm
   brown-butterscotch tones: a cream equatorial zone, tan belts, olive-gray
@@ -87,7 +88,8 @@ saturn-art --snapshot - > saturn.ppm                    # PPM on stdout
 * **ASCII** — each cell is 2×2 supersampled, composited, converted to sRGB
   and mapped by luminance onto `" .:-=+*#%@"`, with 24-bit color per cell.
   A hash-based star field twinkles faintly behind everything, and the camera
-  drifts just enough to keep the view breathing.
+  drifts just enough to keep the view breathing. A little cool dusk light
+  (ringshine) keeps the night side readable so the sphere keeps its shape.
 
 ## Tweaking
 
@@ -95,7 +97,7 @@ All the knobs are cheap to change:
 
 * `src/scene.rs` — `BANDS_HEX` (planet palette), `RINGS_HEX` (ring bands),
   `SPIN` texture terms, `ring_sample`, and the shading constants.
-* `src/main.rs` — `SPIN_RATE` (default: one rotation per ~24 s),
+* `src/main.rs` — `SPIN_RATE` (default: one rotation per ~10 s),
   `BASE_TILT_DEG`, `BASE_AZIMUTH_DEG`, `CAMERA_DISTANCE` and `SUN`
   (direction of the sun).
 
