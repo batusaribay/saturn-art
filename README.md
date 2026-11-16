@@ -9,16 +9,14 @@ at full resolution, in 24-bit color, and in motion.
 
 ## How it works
 
-1. The camera is a real perspective camera on an angled orbit, tipped up to
-   the right by a 12 degree roll and placed 11 degrees above the ring plane,
-   so the rings read as a bright blade and the near ansa is noticeably larger
-   than the far one. It wanders: every few seconds it picks a new nearby pose
-   and eases into it — ring opening, orbit angle, roll, distance and a framing
-   zoom, each within its own range — so the shot never repeats and every run
-   takes a different path. A little over a third of the shots are cinematic
-   close-ups where the globe fills the frame and the rings run off the edges. Glyph hysteresis and temporal smoothing only cross
-   two solid cells, so moving edges leave no ghosts and the razor-thin rings
-   do not strobe.
+1. The camera is a real perspective camera on an angled orbit. Each run starts
+   at a random pose — ring opening, orbit angle and roll — and every few
+   seconds it picks a new nearby pose and eases into it, so the shot never
+   repeats. The framing is computed from the ring system at its widest
+   opening, so the picture is the same size at every pose and always fits the
+   terminal. Glyph hysteresis and temporal smoothing only cross two solid
+   cells, so moving edges leave no ghosts and the razor-thin rings do not
+   strobe.
 2. Each character cell casts four to nine rays, depending on the terminal
    size, and composites what they hit. This is what keeps the rings from
    flickering and dropping out at the ansae.
@@ -52,7 +50,7 @@ at full resolution, in 24-bit color, and in motion.
 
 | View | Look |
 | --- | --- |
-| `saturn-art` | Rings tipped up to the right and open enough to read (default). |
+| `saturn-art` | Randomised ring opening, orbit and roll at a fixed size (default). |
 | `saturn-art --view classic` | Straight-on postcard, rings open, no roll. |
 | `saturn-art --view dramatic` | Angled and rolled, near rings larger. |
 | `saturn-art --view closeup` | Low camera, strong perspective, rings wrap the globe. |
