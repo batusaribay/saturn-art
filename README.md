@@ -139,6 +139,15 @@ fullscreen saturn-art per monitor on the usual screensaver workspace. Any
 key, click or scroll dismisses it, exactly like the stock screensaver, and
 it honours `omarchy toggle screensaver` and the `screensaver-off` flag.
 
+The launcher does not use Omarchy's stock screensaver terminal profile (the
+18pt black one made for the TTE text effect). It starts your terminal with
+its normal font, padding, colors and theme, so the screensaver looks like
+running `saturn-art` yourself, just fullscreen. Font size is what controls
+detail: at 11pt a 1080p screen gives roughly 218x61 cells, at 18pt only
+133x37. Change the font in your terminal's config if you want it finer or
+coarser. If your theme is translucent, the desktop shows through it, same as
+a normal window.
+
 ### Timing
 
 Two idle timers decide how it behaves, both stored in
@@ -166,7 +175,7 @@ number for you.
 
 `timeout never` disables the lock screen entirely: the display will not lock
 or turn off on its own. `omarchy system lock` and your lock keybind still
-work, and `screensaver off` reminds you if you leave it that way.
+work, and `screensaver off` puts the timer back to the value you had before.
 
 To disable the idle screensaver without removing the shim, use
 `saturn-art screensaver delay never`, or:
@@ -176,7 +185,10 @@ omarchy toggle screensaver
 ```
 
 `screensaver off` removes the shim and the PATH block, returning Omarchy to
-its stock screensaver.
+its stock screensaver. It also restores the idle timers exactly as they were
+before `screensaver on` — the values are saved to
+`~/.local/state/saturn-art/screensaver.json` when the screensaver is
+installed, and deleted after they are put back.
 
 ## Uninstall
 

@@ -4,7 +4,8 @@
 # Omarchy's idle service runs `omarchy-launch-screensaver` through a login
 # shell, and this shim comes first in the login PATH.  It opens one
 # fullscreen terminal per monitor on the usual screensaver special workspace,
-# running saturn-art in its screensaver mode (any input dismisses it).
+# running saturn-art in its screensaver mode (any input dismisses it).  The
+# terminal keeps its normal profile: only the class marks it as a screensaver.
 
 pgrep -f '[o]rg.omarchy.screensaver' >/dev/null && exit 0
 
@@ -43,18 +44,21 @@ hypr_exec() {
 for m in $(hyprctl monitors -j | jq -r '.[].name'); do
   hypr_focus_monitor "$m"
   workspace="special:screensaver-$m"
+  # Deliberately no --config/--font-size: saturn-art should look like it does
+  # in a normal window, so it inherits the terminal's own font, padding and
+  # theme.  Hyprland's rules fullscreen the screensaver class anyway.
   case $terminal in
   *Alacritty*)
-    hypr_exec alacritty --class=org.omarchy.screensaver --config-file "$OMARCHY_PATH/default/alacritty/screensaver.toml" -e "$saturn_bin" --screensaver
+    hypr_exec alacritty --class=org.omarchy.screensaver -e "$saturn_bin" --screensaver
     ;;
   *ghostty*)
-    hypr_exec ghostty --class=org.omarchy.screensaver --config-file="$OMARCHY_PATH/default/ghostty/screensaver" --font-size=18 -e "$saturn_bin" --screensaver
+    hypr_exec ghostty --class=org.omarchy.screensaver -e "$saturn_bin" --screensaver
     ;;
   *foot*)
-    hypr_exec foot --app-id=org.omarchy.screensaver --config="$OMARCHY_PATH/default/foot/screensaver.ini" -e "$saturn_bin" --screensaver
+    hypr_exec foot --app-id=org.omarchy.screensaver -e "$saturn_bin" --screensaver
     ;;
   *kitty*)
-    hypr_exec kitty --class=org.omarchy.screensaver --override font_size=18 --override window_padding_width=0 -e "$saturn_bin" --screensaver
+    hypr_exec kitty --class=org.omarchy.screensaver -e "$saturn_bin" --screensaver
     ;;
   esac
   sleep 0.1

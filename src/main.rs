@@ -660,6 +660,16 @@ fn shim_path() -> PathBuf {
     data_home().join("saturn-art/bin/omarchy-launch-screensaver")
 }
 
+fn state_home() -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".local/state"))
+}
+
+fn idle_state_path() -> PathBuf {
+    state_home().join("saturn-art/screensaver.json")
+}
+
 fn on_path(command: &str) -> bool {
     Command::new("sh")
         .arg("-c")
@@ -904,26 +914,113 @@ fn load_shell_config_for_write() -> io::Result<serde_json::Value> {
     }
 }
 
-fn write_idle(key: &str, value: Option<u64>) -> io::Result<()> {
-    let path = user_shell_config();
-    let mut config = load_shell_config_for_write()?;
-    apply_idle(&mut config, key, value).map_err(io::Error::other)?;
-
-    let text = serde_json::to_string_pretty(&config).map_err(io::Error::other)?;
+fn write_text_atomic(path: &Path, text: &str) -> io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".shell.json.{}.tmp", std::process::id()));
-    fs::write(&tmp, text + "\n")?;
-    if let Err(e) = fs::rename(&tmp, &path) {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "config".into());
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    fs::write(&tmp, text)?;
+    if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(e);
     }
+    Ok(())
+}
 
+fn reload_shell() {
     // The shell watches the file, but ask for a reload so `status` is truthful
     // immediately.
     let _ = Command::new("omarchy-shell")
         .args(["-q", "shell", "reloadConfig"])
         .status();
+}
+
+fn write_idle(key: &str, value: Option<u64>) -> io::Result<()> {
+    let path = user_shell_config();
+    let mut config = load_shell_config_for_write()?;
+    apply_idle(&mut config, key, value).map_err(io::Error::other)?;
+    let text = serde_json::to_string_pretty(&config).map_err(io::Error::other)?;
+    write_text_atomic(&path, &(text + "\n"))?;
+    reload_shell();
+    Ok(())
+}
+
+/// Remember the idle timers as they were before saturn-art touched them, so
+/// `screensaver off` can put everything back.  Only the first snapshot counts:
+/// reinstalling or changing the timers later must not overwrite it.
+fn save_idle_snapshot() -> io::Result<()> {
+    let path = idle_state_path();
+    if path.exists() {
+        return Ok(());
+    }
+
+    let config_path = user_shell_config();
+    let config = fs::read_to_string(&config_path).ok();
+    let idle = config
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|value| value.get("idle").cloned());
+    let snapshot = serde_json::json!({
+        "config_existed": config_path.exists(),
+        "idle": idle,
+    });
+    let text = serde_json::to_string_pretty(&snapshot).map_err(io::Error::other)?;
+    write_text_atomic(&path, &(text + "\n"))
+}
+
+fn apply_snapshot(
+    config: &mut serde_json::Value,
+    snapshot: &serde_json::Value,
+) -> Result<(), String> {
+    let object = config
+        .as_object_mut()
+        .ok_or("shell.json is not a JSON object")?;
+    match snapshot.get("idle") {
+        Some(serde_json::Value::Null) | None => {
+            object.remove("idle");
+        }
+        Some(idle) => {
+            object.insert("idle".to_string(), idle.clone());
+        }
+    }
+    Ok(())
+}
+
+fn restore_idle_snapshot() -> io::Result<()> {
+    let path = idle_state_path();
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    let snapshot: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| io::Error::other(format!("could not parse {}: {e}", path.display())))?;
+
+    let config_path = user_shell_config();
+    let mut config = load_shell_config_for_write()?;
+    apply_snapshot(&mut config, &snapshot).map_err(io::Error::other)?;
+
+    // If saturn-art created shell.json, remove it again once it holds nothing
+    // but the idle settings we added.
+    let created_by_us = snapshot.get("config_existed") == Some(&serde_json::Value::Bool(false))
+        && config
+            .as_object()
+            .is_some_and(|object| object.keys().all(|key| key == "version" || key == "idle"));
+    if created_by_us
+        && !config
+            .as_object()
+            .is_some_and(|object| object.contains_key("idle"))
+    {
+        let _ = fs::remove_file(&config_path);
+    } else {
+        let text = serde_json::to_string_pretty(&config).map_err(io::Error::other)?;
+        write_text_atomic(&config_path, &(text + "\n"))?;
+        reload_shell();
+    }
+
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir(state_home().join("saturn-art"));
     Ok(())
 }
 
@@ -948,6 +1045,10 @@ fn screensaver_delay(arg: Option<&str>) -> i32 {
             return 2;
         }
     };
+    if let Err(e) = save_idle_snapshot() {
+        eprintln!("saturn-art: could not save the previous timing: {e}");
+        return 1;
+    }
     if let Err(e) = write_idle("screensaver", value) {
         eprintln!("saturn-art: {e}");
         return 1;
@@ -998,6 +1099,10 @@ fn screensaver_timeout(arg: Option<&str>) -> i32 {
             return 2;
         }
     };
+    if let Err(e) = save_idle_snapshot() {
+        eprintln!("saturn-art: could not save the previous timing: {e}");
+        return 1;
+    }
     if let Err(e) = write_idle("lock", value) {
         eprintln!("saturn-art: {e}");
         return 1;
@@ -1052,6 +1157,10 @@ fn screensaver_install() -> io::Result<()> {
         ));
     }
 
+    // Remember the timers before anything can change them, so `off` restores
+    // them even if this is the first install.
+    save_idle_snapshot()?;
+
     let shim = shim_path();
     let dir = shim.parent().unwrap_or(Path::new(".")).to_path_buf();
     fs::create_dir_all(&dir)?;
@@ -1067,7 +1176,7 @@ fn screensaver_install() -> io::Result<()> {
 
     println!("saturn-art is now the Omarchy screensaver.");
     println!("  show it now:  saturn-art screensaver start");
-    println!("  turn it off:  saturn-art screensaver off");
+    println!("  turn it off:  saturn-art screensaver off  (restores your idle timing)");
     println!("  timing:       {}", describe_timing());
     match login_which("omarchy-launch-screensaver").as_deref() {
         Some(p) if Path::new(p) == shim => {}
@@ -1079,6 +1188,8 @@ fn screensaver_install() -> io::Result<()> {
 }
 
 fn screensaver_remove() -> io::Result<()> {
+    let had_snapshot = idle_state_path().exists();
+
     let shim = shim_path();
     let _ = fs::remove_file(&shim);
     if let Some(dir) = shim.parent() {
@@ -1089,7 +1200,12 @@ fn screensaver_remove() -> io::Result<()> {
     clean_block(&home_dir().join(".bash_profile"))?;
     clean_block(&home_dir().join(".bashrc"))?;
 
+    restore_idle_snapshot()?;
+
     println!("The Omarchy screensaver is back to the stock one.");
+    if had_snapshot {
+        println!("Your idle timing is back to how it was before `saturn-art screensaver on`.");
+    }
     if lock_seconds() == 0 {
         println!(
             "note: the idle lock is still disabled; run `saturn-art screensaver timeout default` to restore it."
@@ -1206,7 +1322,8 @@ Timing
   saturn-art screensaver timeout never    stay until input (no auto-lock)
 
 Durations: 90, 90s, 5m, 1h30m, never (0), or default.  Stored in
-~/.config/omarchy/shell.json as idle.screensaver and idle.lock.
+~/.config/omarchy/shell.json as idle.screensaver and idle.lock.  `on` saves
+the values you had before, and `off` restores them.
 
 The shim is installed at ~/.local/share/saturn-art/bin and a marked PATH
 block goes into ~/.bash_profile, because Omarchy runs the screensaver
@@ -1340,5 +1457,34 @@ mod tests {
         let mut config = serde_json::json!({});
         apply_idle(&mut config, "screensaver", Some(60)).unwrap();
         assert_eq!(config["idle"]["screensaver"], 60);
+    }
+
+    #[test]
+    fn restores_the_saved_idle_object() {
+        let mut config = serde_json::json!({
+            "version": 1,
+            "idle": { "screensaver": 60, "lock": 0 },
+            "bar": { "background": "glassy" }
+        });
+        let snapshot = serde_json::json!({
+            "config_existed": true,
+            "idle": { "lock": 300, "screensaver": 150 }
+        });
+
+        apply_snapshot(&mut config, &snapshot).unwrap();
+        assert_eq!(config["idle"], snapshot["idle"]);
+        assert_eq!(config["bar"]["background"], "glassy");
+    }
+
+    #[test]
+    fn restores_a_missing_idle_object() {
+        let mut config = serde_json::json!({
+            "version": 1,
+            "idle": { "screensaver": 60 }
+        });
+
+        apply_snapshot(&mut config, &serde_json::json!({ "idle": null })).unwrap();
+        assert!(config.get("idle").is_none());
+        assert_eq!(config["version"], 1);
     }
 }
