@@ -22,10 +22,10 @@ test:
 	$(CARGO) test --release
 
 screensaver: install
-	./omarchy/install.sh
+	$(PREFIX)/bin/$(BIN) screensaver on
 
 screensaver-off:
-	./omarchy/uninstall.sh
+	$(PREFIX)/bin/$(BIN) screensaver off
 
 snapshot: build
 	./target/release/$(BIN) --snapshot preview.ppm --cols 240 --rows 70 --time 6

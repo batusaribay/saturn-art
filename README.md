@@ -78,6 +78,7 @@ at full resolution, in 24-bit color, and in motion.
 --roll DEG       camera roll around its axis        (12)
 --dist R         camera distance in planet radii    (6.5)
 --zoom X         framing zoom, 0.5..3.0             (1.0)
+--screensaver    any key or click quits (idle screensaver)
 --no-stars       no star field
 --snapshot PATH  render a single frame and exit
 --cols N         frame width  for --snapshot        (160)
@@ -116,22 +117,27 @@ cargo install --git https://github.com/batusaribay/saturn-art.git --locked
 
 ## Omarchy screensaver
 
-On Omarchy, saturn-art can take over the idle screensaver:
+On Omarchy, saturn-art can take over the idle screensaver. It is built into
+the tool:
 
 ```bash
-make screensaver       # make saturn-art the screensaver
-make screensaver-off   # restore the stock one
+saturn-art screensaver on       # make saturn-art the screensaver
+saturn-art screensaver off      # restore the stock one
+saturn-art screensaver status   # show what is active
+saturn-art screensaver start    # show it now (any input dismisses)
 ```
 
-`make screensaver` installs a launcher shim at
+`make screensaver` and `make screensaver-off` are shortcuts that install the
+latest build first and then call the same commands.
+
+`screensaver on` installs a launcher shim at
 `~/.local/share/saturn-art/bin/omarchy-launch-screensaver` and puts that
 directory first in the login PATH (a marked block in `~/.bash_profile`).
 Omarchy's idle service and the System > Screensaver menu both invoke
 `omarchy-launch-screensaver` through a login shell, so both now open one
 fullscreen saturn-art per monitor on the usual screensaver workspace. Any
-key, click, scroll or pointer movement dismisses it, exactly like the stock
-screensaver, and it honours `omarchy toggle screensaver` and the
-`screensaver-off` flag.
+key, click or scroll dismisses it, exactly like the stock screensaver, and
+it honours `omarchy toggle screensaver` and the `screensaver-off` flag.
 
 The delay is `"idle": { "screensaver": 150 }` in
 `~/.config/omarchy/shell.json` (seconds; 0 disables it). `idle.lock` sets
@@ -142,14 +148,8 @@ removing the shim:
 omarchy toggle screensaver
 ```
 
-To try it without waiting for the idle timer:
-
-```bash
-bash -lc 'omarchy-launch-screensaver force'
-```
-
-`make screensaver-off` removes the shim and the PATH block, returning
-Omarchy to its stock screensaver.
+`screensaver off` removes the shim and the PATH block, returning Omarchy to
+its stock screensaver.
 
 ## Uninstall
 

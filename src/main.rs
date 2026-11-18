@@ -16,7 +16,11 @@
 //! * `r` reset
 
 use std::fmt::Write as _;
+use std::fs;
 use std::io::{self, BufWriter, Write};
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -223,13 +227,19 @@ Options
   --roll DEG       camera roll around its axis        (12)
   --dist R         camera distance in planet radii    (6.5)
   --zoom X         framing zoom, 0.5..3.0             (1.0)
-  --screensaver    any key quits (used by the Omarchy screensaver)
+  --screensaver    any key or click quits (used by the Omarchy screensaver)
   --no-stars       no star field
   --snapshot PATH  render a single frame and exit
   --cols N         frame width  for --snapshot        (160)
   --rows N         frame height for --snapshot        (50)
   --time SECS      scene time for --snapshot          (0)
   --ascii          with --snapshot -, print plain text
+
+Screensaver (Omarchy)
+  saturn-art screensaver on       install it as the idle screensaver
+  saturn-art screensaver off      restore the stock Omarchy screensaver
+  saturn-art screensaver status   show what is active
+  saturn-art screensaver start    show it now (any input dismisses)
 
 Views
   edge       rings tipped up to the right, bright globe  (default)
@@ -624,7 +634,306 @@ fn snapshot(opts: &Options) -> io::Result<()> {
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Omarchy screensaver management
+// ---------------------------------------------------------------------------
+
+const SCREENSAVER_LAUNCHER: &str = include_str!("../omarchy/omarchy-launch-screensaver");
+const PATH_BEGIN: &str = "# >>> saturn-art screensaver >>>";
+const PATH_END: &str = "# <<< saturn-art screensaver <<<";
+
+fn home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+fn data_home() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".local/share"))
+}
+
+fn shim_path() -> PathBuf {
+    data_home().join("saturn-art/bin/omarchy-launch-screensaver")
+}
+
+fn on_path(command: &str) -> bool {
+    Command::new("sh")
+        .arg("-c")
+        .arg(format!("command -v {command}"))
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn login_which(command: &str) -> Option<String> {
+    let out = Command::new("bash")
+        .arg("-lc")
+        .arg(format!("command -v {command}"))
+        .output()
+        .ok()?;
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if out.status.success() && !path.is_empty() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn strip_block(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut skip = false;
+    for line in text.lines() {
+        if line == PATH_BEGIN {
+            skip = true;
+            continue;
+        }
+        if line == PATH_END {
+            skip = false;
+            continue;
+        }
+        if !skip {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn write_block(path: &Path, shim_dir: &Path) -> io::Result<()> {
+    let old = fs::read_to_string(path).unwrap_or_default();
+    let mut text = strip_block(&old);
+    while text.ends_with("\n\n") {
+        text.pop();
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(PATH_BEGIN);
+    text.push('\n');
+    let _ = write!(text, "export PATH=\"{}:$PATH\"", shim_dir.display());
+    text.push('\n');
+    text.push_str(PATH_END);
+    text.push('\n');
+    fs::write(path, text)
+}
+
+fn clean_block(path: &Path) -> io::Result<()> {
+    if let Ok(old) = fs::read_to_string(path) {
+        let cleaned = strip_block(&old);
+        if cleaned != old {
+            fs::write(path, cleaned)?;
+        }
+    }
+    Ok(())
+}
+
+fn idle_seconds(key: &str) -> Option<u32> {
+    let path = home_dir().join(".config/omarchy/shell.json");
+    let text = fs::read_to_string(path).ok()?;
+    let at = text.find(&format!("\"{key}\""))?;
+    let rest = &text[at + key.len() + 2..];
+    let rest = &rest[rest.find(':')? + 1..];
+    let digits: String = rest
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
+fn screensaver_install() -> io::Result<()> {
+    if !Path::new("/usr/share/omarchy").exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Omarchy was not found on this system",
+        ));
+    }
+    if !on_path("saturn-art") {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "saturn-art is not on PATH; run `make install` first",
+        ));
+    }
+
+    let shim = shim_path();
+    let dir = shim.parent().unwrap_or(Path::new(".")).to_path_buf();
+    fs::create_dir_all(&dir)?;
+    fs::write(&shim, SCREENSAVER_LAUNCHER)?;
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755))?;
+
+    // Login shells are what Omarchy's idle service and menu invoke the
+    // launcher through, so the PATH block belongs in ~/.bash_profile.
+    write_block(&home_dir().join(".bash_profile"), &dir)?;
+    // Older versions used ~/.bashrc; that lands before the mise env and is
+    // overwritten, so drop it.
+    clean_block(&home_dir().join(".bashrc"))?;
+
+    println!("saturn-art is now the Omarchy screensaver.");
+    println!("  show it now:  saturn-art screensaver start");
+    println!("  turn it off:  saturn-art screensaver off");
+    println!(
+        "  idle delay:   {}s (idle.screensaver in ~/.config/omarchy/shell.json)",
+        idle_seconds("screensaver").unwrap_or(150)
+    );
+    match login_which("omarchy-launch-screensaver").as_deref() {
+        Some(p) if Path::new(p) == shim => {}
+        _ => println!(
+            "warning: a login shell does not resolve the shim first; check the PATH block in ~/.bash_profile"
+        ),
+    }
+    Ok(())
+}
+
+fn screensaver_remove() -> io::Result<()> {
+    let shim = shim_path();
+    let _ = fs::remove_file(&shim);
+    if let Some(dir) = shim.parent() {
+        let _ = fs::remove_dir(dir);
+    }
+    let _ = fs::remove_dir(data_home().join("saturn-art"));
+
+    clean_block(&home_dir().join(".bash_profile"))?;
+    clean_block(&home_dir().join(".bashrc"))?;
+
+    println!("The Omarchy screensaver is back to the stock one.");
+    Ok(())
+}
+
+fn screensaver_status() {
+    let shim = shim_path();
+    let installed = shim.exists();
+    let resolved = login_which("omarchy-launch-screensaver");
+    let resolved_ours = resolved
+        .as_deref()
+        .map(|p| Path::new(p) == shim)
+        .unwrap_or(false);
+    let idle_off = Command::new("omarchy-toggle-enabled")
+        .arg("screensaver-off")
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    println!("Omarchy screensaver");
+    println!(
+        "  shim:             {}",
+        if installed {
+            shim.display().to_string()
+        } else {
+            "not installed".into()
+        }
+    );
+    println!(
+        "  login shell:      {}",
+        match resolved.as_deref() {
+            Some(p) if resolved_ours => format!("{p} (saturn-art)"),
+            Some(p) => format!("{p} (stock)"),
+            None => "omarchy-launch-screensaver not found".into(),
+        }
+    );
+    println!(
+        "  idle screensaver: {}",
+        if idle_off {
+            "disabled by `omarchy toggle screensaver`"
+        } else {
+            "enabled"
+        }
+    );
+    println!(
+        "  idle delay:       {}s screensaver, {}s lock",
+        idle_seconds("screensaver").unwrap_or(150),
+        idle_seconds("lock").unwrap_or(300)
+    );
+    if !installed {
+        println!("  next:             saturn-art screensaver on");
+    }
+}
+
+fn screensaver_start() -> io::Result<()> {
+    if !shim_path().exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "the screensaver is not installed; run `saturn-art screensaver on`",
+        ));
+    }
+    let status = Command::new("bash")
+        .arg("-lc")
+        .arg("omarchy-launch-screensaver force")
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(
+            "the launcher failed to start the screensaver",
+        ));
+    }
+    Ok(())
+}
+
+fn screensaver_help() {
+    println!(
+        "\
+Use saturn-art as the Omarchy screensaver
+
+Usage
+  saturn-art screensaver on       install it as the idle screensaver
+  saturn-art screensaver off      restore the stock Omarchy screensaver
+  saturn-art screensaver status   show what is active
+  saturn-art screensaver start    show it now (any input dismisses)
+
+The shim is installed at ~/.local/share/saturn-art/bin and a marked PATH
+block goes into ~/.bash_profile, because Omarchy runs the screensaver
+launcher through a login shell."
+    );
+}
+
+fn screensaver_command(args: &[String]) -> i32 {
+    match args.first().map(|s| s.as_str()).unwrap_or("status") {
+        "on" | "enable" | "install" => match screensaver_install() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("saturn-art: {e}");
+                1
+            }
+        },
+        "off" | "disable" | "uninstall" => match screensaver_remove() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("saturn-art: {e}");
+                1
+            }
+        },
+        "start" | "show" | "test" => match screensaver_start() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("saturn-art: {e}");
+                1
+            }
+        },
+        "status" => {
+            screensaver_status();
+            0
+        }
+        "help" | "-h" | "--help" => {
+            screensaver_help();
+            0
+        }
+        other => {
+            eprintln!("saturn-art: unknown screensaver action: {other}");
+            eprintln!("try `saturn-art screensaver --help`");
+            2
+        }
+    }
+}
+
 fn main() {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.first().map(|s| s.as_str()) == Some("screensaver") {
+        std::process::exit(screensaver_command(&raw[1..]));
+    }
+
     let opts = match parse_args() {
         Ok(o) => o,
         Err(e) => {
