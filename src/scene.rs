@@ -14,7 +14,7 @@
 //! Colors are real Saturn tones (pale butterscotch belts, cream zones,
 //! bluish-gray north polar hood, tan/cream rings) kept in linear light.
 
-use std::f32::consts::PI;
+use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
 
 use crate::color::{Rgb, from_hex};
@@ -165,7 +165,7 @@ pub struct Params {
     pub spin: f32,
     /// Unit vector pointing from the planet toward the sun.
     pub sun: V3,
-    /// Time in seconds, used only for the star twinkle.
+    /// Time in seconds, used for the star twinkle.
     pub time: f32,
     pub stars: bool,
     /// Glyph ramp, dark to bright.
@@ -227,6 +227,18 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
         (max_v.max(max_u * 2.0 * rows as f32 / cols as f32) * 1.12) / FRAME_FILL / p.zoom.max(0.3);
     let half_w = tan_half * cols as f32 / rows as f32 * CELL_ASPECT;
 
+    // The star field is anchored to the sky, not to the character grid: each
+    // star has a fixed direction and is projected through the camera every
+    // frame, so it drifts (and twinkles) instead of sitting frozen in a cell.
+    let v_half = tan_half.atan();
+    let h_half = half_w.atan();
+    let cell_ang = (2.0 * v_half / rows as f32 + 2.0 * h_half / cols as f32) * 0.5;
+    let stars = p.stars.then(|| {
+        star_layer(
+            cols, rows, fwd, right, up, half_w, tan_half, cell_ang, p.time,
+        )
+    });
+
     let mut cells = vec![Cell::default(); cols * rows];
 
     // Supersampling: rings are only a cell or two thick at this angle, so
@@ -249,11 +261,9 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
 
     for j in 0..rows {
         for i in 0..cols {
-            let bg = if p.stars {
-                star(i, j, p.time)
-            } else {
-                Rgb::ZERO
-            };
+            let bg = stars
+                .as_ref()
+                .map_or(Rgb::ZERO, |layer| layer[j * cols + i]);
 
             let mut acc = Rgb::ZERO;
             let mut covered = 0.0_f32;
@@ -308,12 +318,7 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
             let is_star = bg.luma() > 0.0 && covered < 0.03;
             let mut gi = 0u8;
             let ch = if is_star {
-                // Stars are dots; only a rare few get the brighter glyph.
-                if (h2_of(i, j) >> 24) % 24 == 0 {
-                    b'+'
-                } else {
-                    b'.'
-                }
+                b'.'
             } else {
                 let (glyph_ch, index) =
                     glyph_with_index(r, g, b, p.ramp, prev, j * cols + i, solid);
@@ -362,11 +367,6 @@ fn shade_ray(o: V3, dir: V3, spin: f32, sun: V3, time: f32, bg: Rgb) -> (Rgb, f3
             None => (bg, 0.0, false),
         },
     }
-}
-
-#[inline]
-fn h2_of(col: usize, row: usize) -> u32 {
-    hash2(col as u32 ^ 0x9e37, row as u32 ^ 0x85eb)
 }
 
 /// Pick an ASCII glyph for an sRGB color.
@@ -785,27 +785,101 @@ fn gauss(x: f32, center: f32, width: f32) -> f32 {
 // star field
 // ---------------------------------------------------------------------------
 
-fn star(col: usize, row: usize, time: f32) -> Rgb {
-    let h = hash2(col as u32, row as u32);
-    // roughly 18 in 1000 cells hold a star
-    if h % 1000 >= 6 {
-        return Rgb::ZERO;
+/// Project the sky's stars through the camera into a per-cell background.
+///
+/// Stars live on the celestial sphere at fixed angular positions.  Each frame
+/// they are projected with the same perspective camera as the planet, so a
+/// camera move slides the whole field instead of leaving it painted on the
+/// terminal.  Every star is a single `.` cell.
+#[allow(clippy::too_many_arguments)]
+fn star_layer(
+    cols: usize,
+    rows: usize,
+    fwd: V3,
+    right: V3,
+    up: V3,
+    half_w: f32,
+    tan_half: f32,
+    cell_ang: f32,
+    time: f32,
+) -> Vec<Rgb> {
+    let mut layer = vec![Rgb::ZERO; cols * rows];
+
+    // One candidate star per patch of sky about the size of a character cell.
+    let step = cell_ang.clamp(1e-4, 0.08);
+    let n_az = (TAU / step).round().max(8.0) as i32;
+    let step_az = TAU / n_az as f32;
+    let n_el = (PI / step).round().max(4.0) as i32;
+    let step_el = PI / n_el as f32;
+
+    // Only the cone the camera can see can produce a star.  Scanning the whole
+    // sphere was measurably expensive on a large terminal.
+    let centre_el = fwd.y.clamp(-1.0, 1.0).asin();
+    let centre_az = fwd.x.atan2(fwd.z);
+    let radius = (tan_half * tan_half + half_w * half_w).sqrt().atan() + 2.0 * step;
+    let el0 = (((centre_el - radius + PI * 0.5) / step_el).floor() as i32).max(0);
+    let el1 = (((centre_el + radius + PI * 0.5) / step_el).ceil() as i32).min(n_el - 1);
+    let cos_min = (centre_el.abs() + radius)
+        .min(PI * 0.5 - 1e-3)
+        .cos()
+        .max(0.15);
+    let r_az = (radius / cos_min).min(PI);
+    let az_span = ((r_az / step_az).ceil() as i32).min(n_az / 2);
+    let az_centre = (centre_az / step_az).floor() as i32;
+
+    for iy in el0..=el1 {
+        for k in -az_span..=az_span {
+            let ix = (az_centre + k).rem_euclid(n_az);
+            let h = hash2(ix as u32 ^ 0x9e37, iy as u32 ^ 0x85eb);
+            // Roughly 4 in 1000 patches hold a star: sparse, but enough to
+            // read as a sky behind the rings.
+            if h & 1023 >= 4 {
+                continue;
+            }
+
+            let hs = hash2(ix as u32 ^ 0x68bc, iy as u32 ^ 0x21f0);
+            let hb = hash2(ix as u32 ^ 0x4f1b, iy as u32 ^ 0x9e35);
+            let fx = (hs & 0xffff) as f32 / 65535.0;
+            let fy = ((hs >> 16) & 0xffff) as f32 / 65535.0;
+            let el = (iy as f32 + fy) * step_el - PI * 0.5;
+            let az = (ix as f32 + fx) * step_az;
+            let (se, ce) = el.sin_cos();
+            let (sa, ca) = az.sin_cos();
+            let dir = V3::new(ce * sa, se, ce * ca);
+
+            let z = dir.dot(fwd);
+            if z <= 0.05 {
+                continue;
+            }
+            let u = dir.dot(right) / z;
+            let v = dir.dot(up) / z;
+            if u.abs() > half_w || v.abs() > tan_half {
+                continue;
+            }
+
+            // Nearest cell: a star is one crisp dot, and adjacent cells light
+            // up as the camera slides the field across the grid.
+            let x = ((u / half_w * 0.5 + 0.5) * cols as f32).floor() as i32;
+            let y = ((0.5 - v / tan_half * 0.5) * rows as f32).floor() as i32;
+            if x < 0 || y < 0 || x >= cols as i32 || y >= rows as i32 {
+                continue;
+            }
+
+            let phase = (hb & 0xff) as f32 / 255.0 * TAU;
+            let speed = 0.55 + ((hb >> 8) & 0xff) as f32 / 255.0 * 2.1;
+            let twinkle = 0.72 + 0.28 * (time * speed + phase).sin();
+            let base = 0.20 + ((hb >> 16) & 0xff) as f32 / 255.0 * 0.34;
+            let color = if (hb >> 24) & 7 == 0 {
+                // a few slightly warm stars
+                Rgb::new(0.86, 0.81, 0.74)
+            } else {
+                Rgb::new(0.80, 0.80, 0.82)
+            };
+            let cell = &mut layer[y as usize * cols + x as usize];
+            *cell = cell.add(color.mul(base * twinkle * 1.5));
+        }
     }
-    let h2 = hash2(col as u32 ^ 0x9e37, row as u32 ^ 0x85eb);
-    let phase = (h2 & 0xff) as f32 / 255.0 * PI * 2.0;
-    let twinkle = 0.70 + 0.30 * (time * 1.7 + phase).sin();
-    // Keep every star clearly brighter than the sky so none reads as a
-    // black speck on a dark terminal theme.
-    let base = 0.22 + 0.34 * ((h2 >> 8) & 0xff) as f32 / 255.0;
-    let warm = (h2 >> 16) & 7 == 0;
-    let c = if warm {
-        // a few slightly warm stars
-        Rgb::new(0.86, 0.82, 0.76)
-    } else {
-        // the rest are neutral white-grey
-        Rgb::new(0.80, 0.80, 0.82)
-    };
-    c.mul(base * twinkle * 1.5)
+    layer
 }
 
 #[inline]
@@ -901,6 +975,38 @@ mod tests {
         let c = shade_planet(p, d, 0.22, sun);
         assert!(c.r.is_finite() && c.g.is_finite() && c.b.is_finite());
         assert!(c.luma() > 0.2);
+    }
+
+    #[test]
+    fn stars_are_sparse_and_follow_the_camera() {
+        let (_, fwd, right, up) = camera_basis(15f32.to_radians(), 10f32.to_radians(), 0.0, 9.0);
+        let layer = star_layer(120, 40, fwd, right, up, 0.9, 0.4, 0.012, 3.0);
+        let lit = layer.iter().filter(|c| c.luma() > 0.0).count();
+        assert!(lit > 0, "some stars should be visible");
+        assert!(lit < 120 * 40 / 100, "stars should be sparse, got {lit}");
+
+        // Deterministic for a fixed sky and time.
+        let again = star_layer(120, 40, fwd, right, up, 0.9, 0.4, 0.012, 3.0);
+        assert!(layer.iter().zip(&again).all(|(a, b)| a.luma() == b.luma()));
+
+        // Twinkling changes brightness over time.
+        let later = star_layer(120, 40, fwd, right, up, 0.9, 0.4, 0.012, 4.0);
+        assert!(
+            layer
+                .iter()
+                .zip(&later)
+                .any(|(a, b)| (a.luma() - b.luma()).abs() > 1e-4)
+        );
+
+        // Moving the camera slides the field across the grid.
+        let (_, fwd2, right2, up2) = camera_basis(15f32.to_radians(), 14f32.to_radians(), 0.0, 9.0);
+        let moved = star_layer(120, 40, fwd2, right2, up2, 0.9, 0.4, 0.012, 3.0);
+        assert!(
+            layer
+                .iter()
+                .zip(&moved)
+                .any(|(a, b)| (a.luma() - b.luma()).abs() > 1e-4)
+        );
     }
 
     #[test]

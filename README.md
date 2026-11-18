@@ -39,7 +39,10 @@ at full resolution, in 24-bit color, and in motion.
 8. The result is converted to sRGB and mapped by luminance onto a glyph ramp,
    with 24-bit color per cell. Eight ramps are built in — classic, detailed,
    soft, blocks, dense, dots, minimal and mixed — and `c` cycles them live.
-   A hash-based star field twinkles behind everything.
+   Stars sit at fixed positions on the celestial sphere and are projected
+   through the same camera every frame, so they drift as the camera moves
+   instead of sitting on the terminal grid, and each twinkles on its own
+   schedule. Only `.` is used, never `+`.
 9. There is no permanent overlay. A key press reports itself briefly on the
    last row (charset, speed, pause) and then fades, so the scene keeps the
    whole terminal.
