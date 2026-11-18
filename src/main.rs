@@ -56,6 +56,7 @@ struct Options {
     time: f32,
     ascii: bool,
     charset: usize,
+    screensaver: bool,
 }
 
 impl Default for Options {
@@ -76,6 +77,7 @@ impl Default for Options {
             time: 0.0,
             ascii: false,
             charset: 0,
+            screensaver: false,
         }
     }
 }
@@ -179,6 +181,7 @@ fn parse_args() -> Result<Options, String> {
                     .filter(|i| *i < CHARSETS.len())
                     .ok_or_else(|| format!("unknown charset: {v}"))?;
             }
+            "--screensaver" => o.screensaver = true,
             "--no-stars" => o.stars = false,
             "--snapshot" => o.snapshot = Some(next("--snapshot")?),
             "--cols" => {
@@ -220,6 +223,7 @@ Options
   --roll DEG       camera roll around its axis        (12)
   --dist R         camera distance in planet radii    (6.5)
   --zoom X         framing zoom, 0.5..3.0             (1.0)
+  --screensaver    any key quits (used by the Omarchy screensaver)
   --no-stars       no star field
   --snapshot PATH  render a single frame and exit
   --cols N         frame width  for --snapshot        (160)
@@ -247,18 +251,26 @@ Keys
 // terminal plumbing
 // ---------------------------------------------------------------------------
 
-struct TermGuard;
+struct TermGuard {
+    mouse: bool,
+}
 
 impl TermGuard {
-    fn enter() -> io::Result<Self> {
+    fn enter(screensaver: bool) -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)?;
-        Ok(Self)
+        if screensaver {
+            let _ = execute!(io::stdout(), event::EnableMouseCapture);
+        }
+        Ok(Self { mouse: screensaver })
     }
 }
 
 impl Drop for TermGuard {
     fn drop(&mut self) {
+        if self.mouse {
+            let _ = execute!(io::stdout(), event::DisableMouseCapture);
+        }
         let _ = execute!(io::stdout(), cursor::Show, terminal::LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
     }
@@ -267,6 +279,7 @@ impl Drop for TermGuard {
 fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(io::stdout(), event::DisableMouseCapture);
         let _ = execute!(io::stdout(), cursor::Show, terminal::LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
         default(info);
@@ -359,7 +372,7 @@ impl Cam {
 
 fn run(opts: Options) -> io::Result<()> {
     install_panic_hook();
-    let _guard = TermGuard::enter()?;
+    let _guard = TermGuard::enter(opts.screensaver)?;
 
     let mut out = BufWriter::with_capacity(1 << 19, io::stdout().lock());
 
@@ -388,6 +401,15 @@ fn run(opts: Options) -> io::Result<()> {
 
         // --- input -------------------------------------------------------
         while event::poll(Duration::ZERO)? {
+            // In screensaver mode any real input (key, click, scroll, or
+            // pointer movement) dismisses it.  Resize and focus events are
+            // ignored: a freshly mapped window emits them immediately.
+            if opts.screensaver {
+                match event::read()? {
+                    Event::Key(_) | Event::Mouse(_) => break 'main,
+                    _ => continue,
+                }
+            }
             let Event::Key(k) = event::read()? else {
                 continue;
             };

@@ -114,6 +114,43 @@ it usable from scripts and for wallpapers.
 cargo install --git https://github.com/batusaribay/saturn-art.git --locked
 ```
 
+## Omarchy screensaver
+
+On Omarchy, saturn-art can take over the idle screensaver:
+
+```bash
+make screensaver       # make saturn-art the screensaver
+make screensaver-off   # restore the stock one
+```
+
+`make screensaver` installs a launcher shim at
+`~/.local/share/saturn-art/bin/omarchy-launch-screensaver` and puts that
+directory first in the login PATH (a marked block in `~/.bash_profile`).
+Omarchy's idle service and the System > Screensaver menu both invoke
+`omarchy-launch-screensaver` through a login shell, so both now open one
+fullscreen saturn-art per monitor on the usual screensaver workspace. Any
+key, click, scroll or pointer movement dismisses it, exactly like the stock
+screensaver, and it honours `omarchy toggle screensaver` and the
+`screensaver-off` flag.
+
+The delay is `"idle": { "screensaver": 150 }` in
+`~/.config/omarchy/shell.json` (seconds; 0 disables it). `idle.lock` sets
+when the lock screen takes over. To disable the idle screensaver without
+removing the shim:
+
+```bash
+omarchy toggle screensaver
+```
+
+To try it without waiting for the idle timer:
+
+```bash
+bash -lc 'omarchy-launch-screensaver force'
+```
+
+`make screensaver-off` removes the shim and the PATH block, returning
+Omarchy to its stock screensaver.
+
 ## Uninstall
 
 ```bash

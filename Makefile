@@ -2,7 +2,7 @@ PREFIX ?= $(HOME)/.local
 BIN     = saturn-art
 CARGO  ?= cargo
 
-.PHONY: all build run install uninstall test snapshot clean
+.PHONY: all build run install uninstall test snapshot screensaver screensaver-off clean
 
 all: build
 
@@ -20,6 +20,12 @@ uninstall:
 
 test:
 	$(CARGO) test --release
+
+screensaver: install
+	./omarchy/install.sh
+
+screensaver-off:
+	./omarchy/uninstall.sh
 
 snapshot: build
 	./target/release/$(BIN) --snapshot preview.ppm --cols 240 --rows 70 --time 6
