@@ -12,7 +12,6 @@
 //! * `space` pause
 //! * `+` / `-` speed up / slow down
 //! * `c` cycle the glyph ramp
-//! * `s` toggle stars
 //! * `r` reset
 
 use std::fmt::Write as _;
@@ -53,7 +52,6 @@ struct Options {
     distance: f32,
     zoom: f32,
     sun: V3,
-    stars: bool,
     snapshot: Option<String>,
     cols: usize,
     rows: usize,
@@ -61,6 +59,7 @@ struct Options {
     ascii: bool,
     charset: usize,
     screensaver: bool,
+    fps_set: bool,
 }
 
 impl Default for Options {
@@ -74,7 +73,6 @@ impl Default for Options {
             distance: CAMERA_DISTANCE,
             zoom: 1.0,
             sun: SUN,
-            stars: true,
             snapshot: None,
             cols: 160,
             rows: 50,
@@ -82,6 +80,7 @@ impl Default for Options {
             ascii: false,
             charset: 0,
             screensaver: false,
+            fps_set: false,
         }
     }
 }
@@ -114,6 +113,7 @@ fn parse_args() -> Result<Options, String> {
             "--fps" => {
                 o.fps = next("--fps")?.parse().map_err(|_| "bad --fps")?;
                 o.fps = o.fps.clamp(5, 120);
+                o.fps_set = true;
             }
             "--speed" => {
                 o.speed = next("--speed")?.parse().map_err(|_| "bad --speed")?;
@@ -186,7 +186,6 @@ fn parse_args() -> Result<Options, String> {
                     .ok_or_else(|| format!("unknown charset: {v}"))?;
             }
             "--screensaver" => o.screensaver = true,
-            "--no-stars" => o.stars = false,
             "--snapshot" => o.snapshot = Some(next("--snapshot")?),
             "--cols" => {
                 o.cols = next("--cols")?.parse().map_err(|_| "bad --cols")?;
@@ -202,6 +201,12 @@ fn parse_args() -> Result<Options, String> {
             "--ascii" => o.ascii = true,
             other => return Err(format!("unknown argument: {other}")),
         }
+    }
+    // A screensaver should sip power: a third of the frame rate and 2x2
+    // sampling (see the supersampling threshold) is plenty for a slow orbital
+    // drift.  Pass --fps to override.
+    if o.screensaver && !o.fps_set {
+        o.fps = 10;
     }
     Ok(o)
 }
@@ -220,7 +225,7 @@ Usage
 Options
   --view NAME      edge | classic | dramatic | closeup
   --charset NAME   glyph ramp (see Charsets)           (classic)
-  --fps N          animation frame rate, 5..120       (30)
+  --fps N          animation frame rate, 5..120       (30, 10 as screensaver)
   --speed X        time multiplier                    (1.0)
   --tilt DEG       camera elevation, -85..85 deg      (15)
   --azimuth DEG    camera angle around the planet     (10)
@@ -228,7 +233,6 @@ Options
   --dist R         camera distance in planet radii    (6.5)
   --zoom X         framing zoom, 0.5..3.0             (1.0)
   --screensaver    any key or click quits (used by the Omarchy screensaver)
-  --no-stars       no star field
   --snapshot PATH  render a single frame and exit
   --cols N         frame width  for --snapshot        (160)
   --rows N         frame height for --snapshot        (50)
@@ -255,7 +259,7 @@ Charsets
 Keys
   q / Esc   quit            space   pause
   + / -     speed           c       cycle charset
-  s         stars           r       reset"
+  r         reset"
     );
 }
 
@@ -394,11 +398,11 @@ fn run(opts: Options) -> io::Result<()> {
     let mut t: f32 = 0.0;
     let mut speed = opts.speed;
     let mut paused = false;
-    let mut stars = opts.stars;
     let mut charset = opts.charset;
     let mut status: Option<(String, f32)> = None;
     let mut dims = (0usize, 0usize);
     let mut prev: Option<Vec<scene::Cell>> = None;
+    let mut drawn: Option<Vec<scene::Cell>> = None;
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -448,10 +452,6 @@ fn run(opts: Options) -> io::Result<()> {
                     charset = (charset + 1) % CHARSETS.len();
                     status = Some((format!("charset: {}", CHARSETS[charset].name), 2.5));
                 }
-                KeyCode::Char('s') | KeyCode::Char('S') => {
-                    stars = !stars;
-                    status = Some((format!("stars: {}", if stars { "on" } else { "off" }), 2.5));
-                }
                 KeyCode::Char('r') | KeyCode::Char('R') => {
                     t = 0.0;
                     speed = opts.speed;
@@ -482,7 +482,6 @@ fn run(opts: Options) -> io::Result<()> {
             spin: t * SPIN_RATE,
             sun: opts.sun,
             time: t,
-            stars,
             ramp: CHARSETS[charset].ramp,
         };
         // Reuse the previous frame's glyphs as hysteresis, but only when the
@@ -491,36 +490,53 @@ fn run(opts: Options) -> io::Result<()> {
         let cells = scene::render(cols, rows, &p, prev_ref);
         prev = Some(cells.clone());
 
-        let mut s = String::with_capacity(cols * rows * 8 + 64);
-        let mut last_rgb = (0u8, 0u8, 0u8);
+        let mut s = String::with_capacity(cols * rows * 4 + 64);
         if dims != (cols, rows) {
             // New geometry: wipe whatever the previous layout left behind,
             // and make sure the cursor stays hidden after a window change.
             s.push_str("\x1b[2J");
             dims = (cols, rows);
+            drawn = None;
         }
-        s.push_str("\x1b[?25l\x1b[1;1H");
+        s.push_str("\x1b[?25l");
+
+        // Send only cells that changed.  With no star field the sky is a
+        // constant black, so most of a large screen costs nothing per frame.
+        let mut last_rgb: Option<(u8, u8, u8)> = None;
+        let mut cursor: Option<(usize, usize)> = None;
         for j in 0..rows {
-            if j > 0 {
-                let _ = write!(s, "\x1b[{};1H", j + 1);
-            }
             for i in 0..cols {
-                let c = cells[j * cols + i];
-                if c.ch == b' ' {
-                    s.push(' ');
+                let n = j * cols + i;
+                let c = cells[n];
+                let changed = match drawn.as_ref() {
+                    None => true,
+                    Some(old) => {
+                        let o = old[n];
+                        o.ch != c.ch || o.r != c.r || o.g != c.g || o.b != c.b
+                    }
+                };
+                if !changed {
                     continue;
                 }
-                // Reuse the current color when the next cell is within a
-                // couple of levels: imperceptible, and it saves a lot of
-                // escape bytes on smooth gradients.
-                let close = c.r.abs_diff(last_rgb.0) <= 2
-                    && c.g.abs_diff(last_rgb.1) <= 2
-                    && c.b.abs_diff(last_rgb.2) <= 2;
-                if !close {
-                    let _ = write!(s, "\x1b[38;2;{};{};{}m", c.r, c.g, c.b);
-                    last_rgb = (c.r, c.g, c.b);
+                if cursor != Some((i, j)) {
+                    let _ = write!(s, "\x1b[{};{}H", j + 1, i + 1);
+                }
+                if c.ch != b' ' {
+                    // Reuse the current color when the next cell is within a
+                    // couple of levels: imperceptible, and it saves a lot of
+                    // escape bytes on smooth gradients.
+                    let close = last_rgb.is_some_and(|last| {
+                        c.r.abs_diff(last.0) <= 2
+                            && c.g.abs_diff(last.1) <= 2
+                            && c.b.abs_diff(last.2) <= 2
+                    });
+                    if !close {
+                        let _ = write!(s, "\x1b[38;2;{};{};{}m", c.r, c.g, c.b);
+                        last_rgb = Some((c.r, c.g, c.b));
+                    }
                 }
                 s.push(c.ch as char);
+                cursor = if i + 1 < cols { Some((i + 1, j)) } else { None };
             }
         }
 
@@ -553,7 +569,15 @@ fn run(opts: Options) -> io::Result<()> {
             }
         }
 
-        s.push_str("\x1b[0m\x1b[J");
+        // The last row carries the fade-out status message, so repaint it
+        // every frame: the message then disappears cleanly.
+        let mut sent = cells.clone();
+        for i in 0..cols {
+            sent[(rows - 1) * cols + i].ch = 0;
+        }
+        drawn = Some(sent);
+
+        s.push_str("\x1b[0m");
         out.write_all(s.as_bytes())?;
         out.flush()?;
 
@@ -580,7 +604,6 @@ fn snapshot(opts: &Options) -> io::Result<()> {
         spin: opts.time * SPIN_RATE,
         sun: opts.sun,
         time: opts.time,
-        stars: opts.stars,
         ramp: CHARSETS[opts.charset].ramp,
     };
     let cells = scene::render(opts.cols, opts.rows, &p, None);

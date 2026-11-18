@@ -32,6 +32,16 @@ hypr_focus_monitor() {
     hyprctl dispatch focusmonitor "$1" >/dev/null 2>&1
 }
 
+hide_cursor() {
+  hyprctl eval 'hl.config({ cursor = { invisible = true } })' >/dev/null 2>&1 ||
+    hyprctl keyword cursor:invisible true >/dev/null 2>&1 || true
+}
+
+show_cursor() {
+  hyprctl eval 'hl.config({ cursor = { invisible = false } })' >/dev/null 2>&1 ||
+    hyprctl keyword cursor:invisible false >/dev/null 2>&1 || true
+}
+
 # Launch a command on this monitor's screensaver special workspace.  Hyprland
 # 0.56 takes commands through its Lua dispatcher.
 hypr_exec() {
@@ -40,6 +50,8 @@ hypr_exec() {
   hyprctl dispatch "hl.dsp.exec_cmd([[[workspace $workspace] $command]])" >/dev/null 2>&1 ||
     hyprctl dispatch exec -- "[workspace $workspace]" bash -lc "$command" >/dev/null 2>&1
 }
+
+hide_cursor
 
 for m in $(hyprctl monitors -j | jq -r '.[].name'); do
   hypr_focus_monitor "$m"
@@ -65,3 +77,13 @@ for m in $(hyprctl monitors -j | jq -r '.[].name'); do
 done
 
 [ -n "$focused" ] && hypr_focus_monitor "$focused"
+
+# Put the pointer back as soon as the last saturn-art window is gone.  The
+# class travels through the environment so this script does not match itself.
+(
+  while hyprctl clients -j 2>/dev/null |
+    SCREENSAVER=org.omarchy.screensaver jq -e 'any(.[]; .mapped and .class == env.SCREENSAVER)' >/dev/null 2>&1; do
+    sleep 0.2
+  done
+  show_cursor
+) >/dev/null 2>&1 &

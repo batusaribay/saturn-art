@@ -39,10 +39,6 @@ at full resolution, in 24-bit color, and in motion.
 8. The result is converted to sRGB and mapped by luminance onto a glyph ramp,
    with 24-bit color per cell. Eight ramps are built in — classic, detailed,
    soft, blocks, dense, dots, minimal and mixed — and `c` cycles them live.
-   Stars sit at fixed positions on the celestial sphere and are projected
-   through the same camera every frame, so they drift as the camera moves
-   instead of sitting on the terminal grid, and each twinkles on its own
-   schedule. Only `.` is used, never `+`.
 9. There is no permanent overlay. A key press reports itself briefly on the
    last row (charset, speed, pause) and then fades, so the scene keeps the
    whole terminal.
@@ -66,7 +62,6 @@ at full resolution, in 24-bit color, and in motion.
 | `space` | Pause. |
 | `+` / `-` | Speed up / slow down. |
 | `c` | Cycle the glyph ramp. |
-| `s` | Toggle the star field. |
 | `r` | Reset time and speed. |
 
 ### Options
@@ -74,7 +69,7 @@ at full resolution, in 24-bit color, and in motion.
 ```text
 --view NAME      edge | classic | dramatic | closeup
 --charset NAME   glyph ramp                         (classic)
---fps N          animation frame rate, 5..120       (30)
+--fps N          animation frame rate, 5..120       (30, 10 as screensaver)
 --speed X        time multiplier                    (1.0)
 --tilt DEG       camera elevation, -85..85 deg      (15)
 --azimuth DEG    camera angle around the planet     (10)
@@ -82,7 +77,6 @@ at full resolution, in 24-bit color, and in motion.
 --dist R         camera distance in planet radii    (6.5)
 --zoom X         framing zoom, 0.5..3.0             (1.0)
 --screensaver    any key or click quits (idle screensaver)
---no-stars       no star field
 --snapshot PATH  render a single frame and exit
 --cols N         frame width  for --snapshot        (160)
 --rows N         frame height for --snapshot        (50)
@@ -186,6 +180,12 @@ To disable the idle screensaver without removing the shim, use
 ```bash
 omarchy toggle screensaver
 ```
+
+The screensaver is tuned to be cheap: 10 fps by default (`--fps` overrides
+it), 2x2 supersampling on large grids, and after the first frame only cells
+that actually changed are written. A 1080p fullscreen run costs about a
+fifth of one core, plus a few percent in the terminal. The mouse pointer is
+hidden while it is up and restored when the last window closes.
 
 `screensaver off` removes the shim and the PATH block, returning Omarchy to
 its stock screensaver. It also restores the idle timers exactly as they were
