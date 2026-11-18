@@ -127,8 +127,8 @@ saturn-art screensaver status   # show what is active
 saturn-art screensaver start    # show it now (any input dismisses)
 ```
 
-`make screensaver` and `make screensaver-off` are shortcuts that install the
-latest build first and then call the same commands.
+After upgrading, run `make install` so the installed binary (the one the
+screensaver launches) is the new build.
 
 `screensaver on` installs a launcher shim at
 `~/.local/share/saturn-art/bin/omarchy-launch-screensaver` and puts that
