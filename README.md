@@ -139,10 +139,37 @@ fullscreen saturn-art per monitor on the usual screensaver workspace. Any
 key, click or scroll dismisses it, exactly like the stock screensaver, and
 it honours `omarchy toggle screensaver` and the `screensaver-off` flag.
 
-The delay is `"idle": { "screensaver": 150 }` in
-`~/.config/omarchy/shell.json` (seconds; 0 disables it). `idle.lock` sets
-when the lock screen takes over. To disable the idle screensaver without
-removing the shim:
+### Timing
+
+Two idle timers decide how it behaves, both stored in
+`~/.config/omarchy/shell.json`:
+
+- `idle.screensaver` — when Saturn appears (Omarchy default: 150 s).
+- `idle.lock` — when the lock screen takes over and closes it (default: 300 s).
+
+Both are settable from the tool:
+
+```bash
+saturn-art screensaver timeout 10m      # lock after 10 minutes of idle
+saturn-art screensaver timeout never    # never lock; stays until input
+saturn-art screensaver timeout default  # drop the override
+
+saturn-art screensaver delay 2m         # appear after 2 minutes of idle
+saturn-art screensaver delay never      # never start automatically
+saturn-art screensaver delay default
+```
+
+Durations accept `90`, `90s`, `5m`, `1h30m`, `never` (same as `0`), or
+`default`. `timeout` is measured from when you stop using the machine, so
+the time actually spent on Saturn is `timeout - delay`; `status` prints that
+number for you.
+
+`timeout never` disables the lock screen entirely: the display will not lock
+or turn off on its own. `omarchy system lock` and your lock keybind still
+work, and `screensaver off` reminds you if you leave it that way.
+
+To disable the idle screensaver without removing the shim, use
+`saturn-art screensaver delay never`, or:
 
 ```bash
 omarchy toggle screensaver

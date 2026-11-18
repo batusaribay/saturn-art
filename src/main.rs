@@ -240,6 +240,8 @@ Screensaver (Omarchy)
   saturn-art screensaver off      restore the stock Omarchy screensaver
   saturn-art screensaver status   show what is active
   saturn-art screensaver start    show it now (any input dismisses)
+  saturn-art screensaver delay 2m       appear after 2m of idle
+  saturn-art screensaver timeout 10m    lock after 10m (never = stay on Saturn)
 
 Views
   edge       rings tipped up to the right, bright globe  (default)
@@ -732,18 +734,308 @@ fn clean_block(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn idle_seconds(key: &str) -> Option<u32> {
-    let path = home_dir().join(".config/omarchy/shell.json");
-    let text = fs::read_to_string(path).ok()?;
-    let at = text.find(&format!("\"{key}\""))?;
-    let rest = &text[at + key.len() + 2..];
-    let rest = &rest[rest.find(':')? + 1..];
-    let digits: String = rest
-        .chars()
-        .skip_while(|c| !c.is_ascii_digit())
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse().ok()
+fn user_shell_config() -> PathBuf {
+    home_dir().join(".config/omarchy/shell.json")
+}
+
+fn default_shell_config() -> PathBuf {
+    PathBuf::from("/usr/share/omarchy/config/omarchy/shell.json")
+}
+
+/// The config the running shell is actually using, when it can tell us.
+fn live_shell_config() -> Option<serde_json::Value> {
+    let out = Command::new("omarchy-shell")
+        .args(["shell", "listShellConfig"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&out.stdout).ok()
+}
+
+/// The user's shell.json, falling back to Omarchy's defaults when it is absent.
+fn read_shell_config() -> Option<serde_json::Value> {
+    for path in [user_shell_config(), default_shell_config()] {
+        let Ok(text) = fs::read_to_string(path) else {
+            continue;
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        if let Ok(config) = serde_json::from_str(&text) {
+            return Some(config);
+        }
+    }
+    None
+}
+
+fn idle_seconds_from(config: &serde_json::Value, key: &str) -> Option<u64> {
+    config.get("idle")?.get(key)?.as_u64()
+}
+
+fn idle_seconds(key: &str) -> Option<u64> {
+    live_shell_config()
+        .or_else(read_shell_config)
+        .and_then(|config| idle_seconds_from(&config, key))
+}
+
+/// Idle seconds before the screensaver starts (Omarchy default: 150).
+fn delay_seconds() -> u64 {
+    idle_seconds("screensaver").unwrap_or(150)
+}
+
+/// Idle seconds before the lock screen takes over (Omarchy default: 300).
+fn lock_seconds() -> u64 {
+    idle_seconds("lock").unwrap_or(300)
+}
+
+fn describe_timing() -> String {
+    match (delay_seconds(), lock_seconds()) {
+        (0, 0) => "idle screensaver and lock both disabled".into(),
+        (0, lock) => format!("no idle screensaver; lock after {}", format_duration(lock)),
+        (delay, 0) => format!("appears after {}; never locks", format_duration(delay)),
+        (delay, lock) => format!(
+            "appears after {}; locks after {}",
+            format_duration(delay),
+            format_duration(lock)
+        ),
+    }
+}
+
+fn format_duration(seconds: u64) -> String {
+    if seconds == 0 {
+        return "never".into();
+    }
+    let mut parts = Vec::new();
+    let (hours, minutes, seconds) = (seconds / 3600, seconds % 3600 / 60, seconds % 60);
+    if hours > 0 {
+        parts.push(format!("{hours}h"));
+    }
+    if minutes > 0 {
+        parts.push(format!("{minutes}m"));
+    }
+    if seconds > 0 {
+        parts.push(format!("{seconds}s"));
+    }
+    parts.join(" ")
+}
+
+/// `90`, `90s`, `5m`, `1h30m`, `never`, `off`, or `default`.
+fn parse_duration(text: &str) -> Result<Option<u64>, String> {
+    let text = text.trim().to_ascii_lowercase();
+    match text.as_str() {
+        "default" => return Ok(None),
+        "never" | "off" => return Ok(Some(0)),
+        "" => return Err("missing a duration".into()),
+        _ => {}
+    }
+
+    let mut total: u64 = 0;
+    let mut digits = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            continue;
+        }
+        if ch.is_whitespace() {
+            continue;
+        }
+        let unit = match ch {
+            's' => 1,
+            'm' => 60,
+            'h' => 3600,
+            _ => {
+                return Err(format!(
+                    "unknown unit `{ch}`; use s, m, h, never, or default"
+                ));
+            }
+        };
+        if digits.is_empty() {
+            return Err(format!("missing a number before `{ch}`"));
+        }
+        let n: u64 = digits
+            .parse()
+            .map_err(|_| "duration is too large".to_string())?;
+        total = total.saturating_add(n.saturating_mul(unit));
+        digits.clear();
+    }
+    if !digits.is_empty() {
+        let n: u64 = digits
+            .parse()
+            .map_err(|_| "duration is too large".to_string())?;
+        total = total.saturating_add(n);
+    }
+    Ok(Some(total))
+}
+
+fn apply_idle(config: &mut serde_json::Value, key: &str, value: Option<u64>) -> Result<(), String> {
+    let object = config
+        .as_object_mut()
+        .ok_or("shell.json is not a JSON object")?;
+    let empty = {
+        let idle = object
+            .entry("idle")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or("`idle` in shell.json is not an object")?;
+        match value {
+            Some(seconds) => {
+                idle.insert(key.to_string(), serde_json::json!(seconds));
+            }
+            None => {
+                idle.remove(key);
+            }
+        }
+        idle.is_empty()
+    };
+    if empty {
+        object.remove("idle");
+    }
+    Ok(())
+}
+
+fn load_shell_config_for_write() -> io::Result<serde_json::Value> {
+    let path = user_shell_config();
+    match fs::read_to_string(&path) {
+        Ok(text) if !text.trim().is_empty() => serde_json::from_str(&text)
+            .map_err(|e| io::Error::other(format!("could not parse {}: {e}", path.display()))),
+        _ => Ok(read_shell_config().unwrap_or_else(|| serde_json::json!({ "version": 1 }))),
+    }
+}
+
+fn write_idle(key: &str, value: Option<u64>) -> io::Result<()> {
+    let path = user_shell_config();
+    let mut config = load_shell_config_for_write()?;
+    apply_idle(&mut config, key, value).map_err(io::Error::other)?;
+
+    let text = serde_json::to_string_pretty(&config).map_err(io::Error::other)?;
+    let dir = path.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".shell.json.{}.tmp", std::process::id()));
+    fs::write(&tmp, text + "\n")?;
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+
+    // The shell watches the file, but ask for a reload so `status` is truthful
+    // immediately.
+    let _ = Command::new("omarchy-shell")
+        .args(["-q", "shell", "reloadConfig"])
+        .status();
+    Ok(())
+}
+
+fn screensaver_delay(arg: Option<&str>) -> i32 {
+    let Some(arg) = arg else {
+        if delay_seconds() == 0 {
+            println!("The idle screensaver is disabled.");
+        } else {
+            println!(
+                "saturn-art appears after {} of idle.",
+                format_duration(delay_seconds())
+            );
+        }
+        return 0;
+    };
+
+    let value = match parse_duration(arg) {
+        Ok(value) => value,
+        Err(e) => {
+            eprintln!("saturn-art: {e}");
+            eprintln!("try `saturn-art screensaver --help`");
+            return 2;
+        }
+    };
+    if let Err(e) = write_idle("screensaver", value) {
+        eprintln!("saturn-art: {e}");
+        return 1;
+    }
+
+    match value {
+        Some(0) => {
+            println!("The idle screensaver is disabled; nothing starts automatically.");
+            println!("Turn it back on with `saturn-art screensaver delay default`.");
+        }
+        Some(_) => println!(
+            "saturn-art now appears after {} of idle.",
+            format_duration(delay_seconds())
+        ),
+        None => println!(
+            "saturn-art appears after Omarchy's default ({} of idle).",
+            format_duration(delay_seconds())
+        ),
+    }
+    0
+}
+
+fn screensaver_timeout(arg: Option<&str>) -> i32 {
+    let Some(arg) = arg else {
+        if lock_seconds() == 0 {
+            println!("The lock screen never takes over; saturn-art stays up until input.");
+        } else {
+            println!(
+                "The lock screen takes over after {} of idle.",
+                format_duration(lock_seconds())
+            );
+            let delay = delay_seconds();
+            if delay > 0 && lock_seconds() > delay {
+                println!(
+                    "  that leaves {} of saturn-art.",
+                    format_duration(lock_seconds() - delay)
+                );
+            }
+        }
+        return 0;
+    };
+
+    let value = match parse_duration(arg) {
+        Ok(value) => value,
+        Err(e) => {
+            eprintln!("saturn-art: {e}");
+            eprintln!("try `saturn-art screensaver --help`");
+            return 2;
+        }
+    };
+    if let Err(e) = write_idle("lock", value) {
+        eprintln!("saturn-art: {e}");
+        return 1;
+    }
+
+    match value {
+        Some(0) => {
+            println!("The lock screen is now disabled; saturn-art stays up until input.");
+            println!(
+                "The machine will not lock automatically (`omarchy system lock` still works)."
+            );
+            println!("Restore it with `saturn-art screensaver timeout default`.");
+        }
+        Some(_) => {
+            let delay = delay_seconds();
+            let lock = lock_seconds();
+            println!(
+                "The lock screen takes over after {} of idle.",
+                format_duration(lock)
+            );
+            if delay > 0 && lock > delay {
+                println!(
+                    "  that leaves {} of saturn-art.",
+                    format_duration(lock - delay)
+                );
+            } else if delay > 0 {
+                println!(
+                    "  note: the screensaver starts after {}, so the lock fires first.",
+                    format_duration(delay)
+                );
+            }
+        }
+        None => println!(
+            "The lock screen takes over after Omarchy's default ({} of idle).",
+            format_duration(lock_seconds())
+        ),
+    }
+    0
 }
 
 fn screensaver_install() -> io::Result<()> {
@@ -776,10 +1068,7 @@ fn screensaver_install() -> io::Result<()> {
     println!("saturn-art is now the Omarchy screensaver.");
     println!("  show it now:  saturn-art screensaver start");
     println!("  turn it off:  saturn-art screensaver off");
-    println!(
-        "  idle delay:   {}s (idle.screensaver in ~/.config/omarchy/shell.json)",
-        idle_seconds("screensaver").unwrap_or(150)
-    );
+    println!("  timing:       {}", describe_timing());
     match login_which("omarchy-launch-screensaver").as_deref() {
         Some(p) if Path::new(p) == shim => {}
         _ => println!(
@@ -801,6 +1090,11 @@ fn screensaver_remove() -> io::Result<()> {
     clean_block(&home_dir().join(".bashrc"))?;
 
     println!("The Omarchy screensaver is back to the stock one.");
+    if lock_seconds() == 0 {
+        println!(
+            "note: the idle lock is still disabled; run `saturn-art screensaver timeout default` to restore it."
+        );
+    }
     Ok(())
 }
 
@@ -843,11 +1137,33 @@ fn screensaver_status() {
             "enabled"
         }
     );
+    let delay = delay_seconds();
+    let lock = lock_seconds();
     println!(
-        "  idle delay:       {}s screensaver, {}s lock",
-        idle_seconds("screensaver").unwrap_or(150),
-        idle_seconds("lock").unwrap_or(300)
+        "  appears:          {}",
+        if delay == 0 {
+            "never (idle screensaver disabled)".to_string()
+        } else {
+            format!("after {} of idle", format_duration(delay))
+        }
     );
+    println!(
+        "  lock screen:      {}",
+        if lock == 0 {
+            "never (stays up until input)".to_string()
+        } else if delay > 0 && lock > delay {
+            format!(
+                "after {} of idle ({} of saturn-art)",
+                format_duration(lock),
+                format_duration(lock - delay)
+            )
+        } else {
+            format!("after {} of idle", format_duration(lock))
+        }
+    );
+    if lock == 0 {
+        println!("  note:             the machine will not lock automatically");
+    }
     if !installed {
         println!("  next:             saturn-art screensaver on");
     }
@@ -878,10 +1194,19 @@ fn screensaver_help() {
 Use saturn-art as the Omarchy screensaver
 
 Usage
-  saturn-art screensaver on       install it as the idle screensaver
-  saturn-art screensaver off      restore the stock Omarchy screensaver
-  saturn-art screensaver status   show what is active
-  saturn-art screensaver start    show it now (any input dismisses)
+  saturn-art screensaver on           install it as the idle screensaver
+  saturn-art screensaver off          restore the stock Omarchy screensaver
+  saturn-art screensaver status       show what is active
+  saturn-art screensaver start        show it now (any input dismisses)
+
+Timing
+  saturn-art screensaver delay 2m         appear after 2 minutes of idle
+  saturn-art screensaver delay never      never start automatically
+  saturn-art screensaver timeout 10m      lock screen after 10 minutes
+  saturn-art screensaver timeout never    stay until input (no auto-lock)
+
+Durations: 90, 90s, 5m, 1h30m, never (0), or default.  Stored in
+~/.config/omarchy/shell.json as idle.screensaver and idle.lock.
 
 The shim is installed at ~/.local/share/saturn-art/bin and a marked PATH
 block goes into ~/.bash_profile, because Omarchy runs the screensaver
@@ -916,6 +1241,8 @@ fn screensaver_command(args: &[String]) -> i32 {
             screensaver_status();
             0
         }
+        "delay" => screensaver_delay(args.get(1).map(String::as_str)),
+        "timeout" | "lock" => screensaver_timeout(args.get(1).map(String::as_str)),
         "help" | "-h" | "--help" => {
             screensaver_help();
             0
@@ -951,5 +1278,67 @@ fn main() {
     if let Err(e) = result {
         eprintln!("saturn-art: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_durations() {
+        assert_eq!(parse_duration("90"), Ok(Some(90)));
+        assert_eq!(parse_duration("90s"), Ok(Some(90)));
+        assert_eq!(parse_duration("2m"), Ok(Some(120)));
+        assert_eq!(parse_duration("1h"), Ok(Some(3600)));
+        assert_eq!(parse_duration("1h30m"), Ok(Some(5400)));
+        assert_eq!(parse_duration("1h 2m 3s"), Ok(Some(3723)));
+        assert_eq!(parse_duration("never"), Ok(Some(0)));
+        assert_eq!(parse_duration("off"), Ok(Some(0)));
+        assert_eq!(parse_duration("0"), Ok(Some(0)));
+        assert_eq!(parse_duration("default"), Ok(None));
+        assert_eq!(parse_duration(" DEFAULT "), Ok(None));
+        assert!(parse_duration("5x").is_err());
+        assert!(parse_duration("m").is_err());
+        assert!(parse_duration("").is_err());
+        assert!(parse_duration("-5m").is_err());
+    }
+
+    #[test]
+    fn formats_durations() {
+        assert_eq!(format_duration(0), "never");
+        assert_eq!(format_duration(45), "45s");
+        assert_eq!(format_duration(150), "2m 30s");
+        assert_eq!(format_duration(3600), "1h");
+        assert_eq!(format_duration(5400), "1h 30m");
+    }
+
+    #[test]
+    fn merges_idle_without_touching_other_settings() {
+        let mut config = serde_json::json!({
+            "version": 1,
+            "idle": { "screensaver": 150, "lock": 300 },
+            "bar": { "background": "glassy" }
+        });
+
+        apply_idle(&mut config, "lock", Some(0)).unwrap();
+        assert_eq!(config["idle"]["lock"], 0);
+        assert_eq!(config["idle"]["screensaver"], 150);
+        assert_eq!(config["bar"]["background"], "glassy");
+
+        apply_idle(&mut config, "lock", None).unwrap();
+        assert!(config["idle"].get("lock").is_none());
+        assert_eq!(config["idle"]["screensaver"], 150);
+
+        apply_idle(&mut config, "screensaver", None).unwrap();
+        assert!(config.get("idle").is_none());
+        assert_eq!(config["bar"]["background"], "glassy");
+    }
+
+    #[test]
+    fn creates_idle_from_an_empty_config() {
+        let mut config = serde_json::json!({});
+        apply_idle(&mut config, "screensaver", Some(60)).unwrap();
+        assert_eq!(config["idle"]["screensaver"], 60);
     }
 }
