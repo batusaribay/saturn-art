@@ -750,11 +750,27 @@ fn write_block(path: &Path, shim_dir: &Path) -> io::Result<()> {
     }
     text.push_str(PATH_BEGIN);
     text.push('\n');
-    let _ = write!(text, "export PATH=\"{}:$PATH\"", shim_dir.display());
+    let _ = write!(
+        text,
+        "export PATH=\"{}:$PATH\"",
+        shell_double_quote(&shim_dir.to_string_lossy())
+    );
     text.push('\n');
     text.push_str(PATH_END);
     text.push('\n');
     fs::write(path, text)
+}
+
+/// Escape a value for use inside a double-quoted shell word.
+fn shell_double_quote(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(character, '\\' | '"' | '$' | '`') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 fn clean_block(path: &Path) -> io::Result<()> {
@@ -1424,6 +1440,14 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escapes_shell_sensitive_characters_in_paths() {
+        assert_eq!(
+            shell_double_quote(r#"/home/me/$data/"quoted"/`x`"#),
+            r#"/home/me/\$data/\"quoted\"/\`x\`"#
+        );
+    }
 
     #[test]
     fn parses_durations() {
