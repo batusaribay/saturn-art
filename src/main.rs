@@ -214,7 +214,7 @@ fn parse_args() -> Result<Options, String> {
 fn print_help() {
     println!(
         "\
-A Rust CLI that renders a live, ray-traced Saturn
+A Rust CLI that renders ray-traced Saturn
 
 Usage
   saturn-art                              run it

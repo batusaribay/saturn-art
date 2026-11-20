@@ -1,6 +1,6 @@
 # saturn-art
 
-A Rust CLI that renders a live, ray-traced Saturn
+A Rust CLI that renders ray-traced Saturn
 
 ![saturn-art in a terminal](demo.gif)
 
