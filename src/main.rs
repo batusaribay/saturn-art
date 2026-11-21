@@ -1,4 +1,4 @@
-//! saturn-art — a live, realistic Saturn in colored ASCII art.
+//! saturn-art: a live, realistic Saturn in colored ASCII art.
 //!
 //! Usage:
 //!   saturn-art [--fps N] [--speed X] [--tilt DEG] [--azimuth DEG] [--dist R]
@@ -214,7 +214,7 @@ fn parse_args() -> Result<Options, String> {
 fn print_help() {
     println!(
         "\
-A Rust CLI that renders ray-traced Saturn
+A Rust CLI to render ray-traced Saturn
 
 Usage
   saturn-art                              run it
