@@ -60,6 +60,7 @@ struct Options {
     charset: usize,
     screensaver: bool,
     fps_set: bool,
+    color: ColorMode,
 }
 
 impl Default for Options {
@@ -81,6 +82,7 @@ impl Default for Options {
             charset: 0,
             screensaver: false,
             fps_set: false,
+            color: ColorMode::Auto,
         }
     }
 }
@@ -199,6 +201,10 @@ fn parse_args() -> Result<Options, String> {
                 o.time = next("--time")?.parse().map_err(|_| "bad --time")?;
             }
             "--ascii" => o.ascii = true,
+            "--color" => {
+                let v = next("--color")?;
+                o.color = ColorMode::parse(&v).ok_or_else(|| format!("unknown color mode: {v}"))?;
+            }
             other => return Err(format!("unknown argument: {other}")),
         }
     }
@@ -238,6 +244,7 @@ Options
   --rows N         frame height for --snapshot        (50)
   --time SECS      scene time for --snapshot          (0)
   --ascii          with --snapshot -, print plain text
+  --color WHEN     color: auto, always, or never            (auto)
 
 Screensaver (Omarchy)
   saturn-art screensaver on       install it as the idle screensaver
@@ -386,8 +393,129 @@ impl Cam {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColorMode {
+    Auto,
+    Always,
+    Never,
+}
+
+impl ColorMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "always" => Some(Self::Always),
+            "never" => Some(Self::Never),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColorSupport {
+    Mono,
+    Ansi16,
+    Ansi256,
+    TrueColor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Paint {
+    None,
+    True(u8, u8, u8),
+    Idx(u8),
+    Basic(u8),
+}
+
+impl ColorSupport {
+    fn detect(mode: ColorMode) -> Self {
+        match mode {
+            ColorMode::Never => Self::Mono,
+            ColorMode::Always => Self::TrueColor,
+            ColorMode::Auto => {
+                if std::env::var_os("NO_COLOR").is_some()
+                    || std::env::var("CLICOLOR").ok().as_deref() == Some("0")
+                {
+                    return Self::Mono;
+                }
+                let forced = std::env::var("CLICOLOR_FORCE")
+                    .ok()
+                    .is_some_and(|value| !value.is_empty() && value != "0");
+                if !forced && !io::IsTerminal::is_terminal(&io::stdout()) {
+                    return Self::Mono;
+                }
+                let term = std::env::var("TERM").unwrap_or_default();
+                if term == "dumb" {
+                    return Self::Mono;
+                }
+                let colorterm = std::env::var("COLORTERM").unwrap_or_default();
+                if colorterm.eq_ignore_ascii_case("truecolor")
+                    || colorterm.eq_ignore_ascii_case("24bit")
+                {
+                    return Self::TrueColor;
+                }
+                if term.contains("256color") {
+                    return Self::Ansi256;
+                }
+                Self::Ansi16
+            }
+        }
+    }
+
+    fn paint(self, cell: scene::Cell) -> Paint {
+        match self {
+            Self::Mono => Paint::None,
+            Self::TrueColor => Paint::True(cell.r, cell.g, cell.b),
+            Self::Ansi256 => Paint::Idx(nearest_256(cell.r, cell.g, cell.b)),
+            Self::Ansi16 => Paint::Basic(nearest_16(cell.r, cell.g, cell.b)),
+        }
+    }
+
+    fn status(self) -> Paint {
+        match self {
+            Self::Mono => Paint::None,
+            Self::TrueColor => Paint::True(120, 120, 132),
+            Self::Ansi256 => Paint::Idx(nearest_256(120, 120, 132)),
+            Self::Ansi16 => Paint::Basic(90),
+        }
+    }
+}
+
+fn emit_paint(s: &mut String, paint: Paint) {
+    match paint {
+        Paint::None => {}
+        Paint::True(r, g, b) => {
+            let _ = write!(s, "\x1b[38;2;{r};{g};{b}m");
+        }
+        Paint::Idx(index) => {
+            let _ = write!(s, "\x1b[38;5;{index}m");
+        }
+        Paint::Basic(code) => {
+            let _ = write!(s, "\x1b[{code}m");
+        }
+    }
+}
+
+fn nearest_256(r: u8, g: u8, b: u8) -> u8 {
+    let level = |value: u8| ((value as u16 * 5 + 127) / 255) as u8;
+    16 + 36 * level(r) + 6 * level(g) + level(b)
+}
+
+fn nearest_16(r: u8, g: u8, b: u8) -> u8 {
+    let bright = ((r as u16 + g as u16 + b as u16) / 3) > 140;
+    let base = if r >= g && r >= b {
+        31
+    } else if g >= r && g >= b {
+        32
+    } else {
+        34
+    };
+    if bright { base + 60 } else { base }
+}
+
 fn run(opts: Options) -> io::Result<()> {
     install_panic_hook();
+    let support = ColorSupport::detect(opts.color);
     let _guard = TermGuard::enter(opts.screensaver)?;
 
     let mut out = BufWriter::with_capacity(1 << 19, io::stdout().lock());
@@ -502,7 +630,7 @@ fn run(opts: Options) -> io::Result<()> {
 
         // Send only cells that changed.  With no star field the sky is a
         // constant black, so most of a large screen costs nothing per frame.
-        let mut last_rgb: Option<(u8, u8, u8)> = None;
+        let mut last_paint = Paint::None;
         let mut cursor: Option<(usize, usize)> = None;
         for j in 0..rows {
             for i in 0..cols {
@@ -522,17 +650,19 @@ fn run(opts: Options) -> io::Result<()> {
                     let _ = write!(s, "\x1b[{};{}H", j + 1, i + 1);
                 }
                 if c.ch != b' ' {
+                    let paint = support.paint(c);
                     // Reuse the current color when the next cell is within a
                     // couple of levels: imperceptible, and it saves a lot of
                     // escape bytes on smooth gradients.
-                    let close = last_rgb.is_some_and(|last| {
-                        c.r.abs_diff(last.0) <= 2
-                            && c.g.abs_diff(last.1) <= 2
-                            && c.b.abs_diff(last.2) <= 2
-                    });
+                    let close = match (last_paint, paint) {
+                        (Paint::True(pr, pg, pb), Paint::True(r, g, b)) => {
+                            pr.abs_diff(r) <= 2 && pg.abs_diff(g) <= 2 && pb.abs_diff(b) <= 2
+                        }
+                        (last, next) => last == next,
+                    };
                     if !close {
-                        let _ = write!(s, "\x1b[38;2;{};{};{}m", c.r, c.g, c.b);
-                        last_rgb = Some((c.r, c.g, c.b));
+                        emit_paint(&mut s, paint);
+                        last_paint = paint;
                     }
                 }
                 s.push(c.ch as char);
@@ -550,7 +680,8 @@ fn run(opts: Options) -> io::Result<()> {
         // No permanent footer: only a brief message when a key changes
         // something, drawn over the last row of sky.
         if let Some((msg, _)) = &status {
-            let _ = write!(s, "\x1b[{};1H\x1b[38;2;120;120;132m", rows);
+            let _ = write!(s, "\x1b[{};1H", rows);
+            emit_paint(&mut s, support.status());
             let mut text = String::from(msg);
             if paused {
                 text.push_str("   paused");
@@ -1440,6 +1571,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quantizes_256_color_cube() {
+        assert_eq!(nearest_256(0, 0, 0), 16);
+        assert_eq!(nearest_256(255, 255, 255), 231);
+        assert_eq!(nearest_256(255, 0, 0), 196);
+    }
 
     #[test]
     fn escapes_shell_sensitive_characters_in_paths() {

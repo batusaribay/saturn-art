@@ -68,6 +68,7 @@ Options:
   --rows N         Frame height for --snapshot (50)
   --time SECS      Scene time for --snapshot (0)
   --ascii          With --snapshot -, print plain text
+  --color WHEN     Color: auto, always, or never (auto)
   -h, --help       Print help
   -V, --version    Print version
 ```
@@ -108,6 +109,11 @@ Rendering scales with the terminal. A 140x45 terminal is comfortable at 30 fps;
 large terminals drop to fewer samples per cell. The scene assumes a dark
 background. `--snapshot -` writes a PPM to stdout, or plain text with `--ascii`,
 which makes it usable from scripts and for wallpapers.
+
+Color uses truecolor when the terminal reports it, falls back to 256 colors and
+then 16 colors, and runs without color with `--color never`, `NO_COLOR`,
+`CLICOLOR=0`, or `TERM=dumb`. PPM snapshots always keep full color because they
+are files, not terminal output.
 
 ## Install
 
