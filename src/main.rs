@@ -245,6 +245,8 @@ Options
   --time SECS      scene time for --snapshot          (0)
   --ascii          with --snapshot -, print plain text
   --color WHEN     color: auto, always, or never            (auto)
+  -h, --help       this text
+  -V, --version    print the version
 
 Screensaver (Omarchy)
   saturn-art screensaver on       install it as the idle screensaver
