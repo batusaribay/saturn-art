@@ -73,8 +73,6 @@ Options:
   -V, --version    Print version
 ```
 
-Typical calls:
-
 ```bash
 saturn-art
 saturn-art --view classic
