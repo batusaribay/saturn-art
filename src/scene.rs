@@ -289,12 +289,13 @@ pub fn render(cols: usize, rows: usize, p: &Params, prev: Option<&[Cell]>) -> Ve
             // Temporal smoothing: feathers sub-cell flicker (chiefly the thin
             // ring sheet sliding across a cell) without blurring the motion.
             let solid = covered > 0.01 || planet > 0.55;
-            if let Some(pc) = prev.and_then(|p| p.get(j * cols + i)) {
-                if pc.solid && solid {
-                    r = ((r as u16 * 6 + pc.r as u16 * 4) / 10) as u8;
-                    g = ((g as u16 * 6 + pc.g as u16 * 4) / 10) as u8;
-                    b = ((b as u16 * 6 + pc.b as u16 * 4) / 10) as u8;
-                }
+            if let Some(pc) = prev.and_then(|p| p.get(j * cols + i))
+                && pc.solid
+                && solid
+            {
+                r = ((r as u16 * 6 + pc.r as u16 * 4) / 10) as u8;
+                g = ((g as u16 * 6 + pc.g as u16 * 4) / 10) as u8;
+                b = ((b as u16 * 6 + pc.b as u16 * 4) / 10) as u8;
             }
             let (glyph_ch, index) = glyph_with_index(r, g, b, p.ramp, prev, j * cols + i, solid);
             let gi = index;
@@ -337,7 +338,7 @@ fn shade_ray(o: V3, dir: V3, spin: f32, sun: V3, time: f32) -> (Rgb, f32, bool) 
             (col, 1.0, true)
         }
         None => match ring {
-            Some((_, alpha, rc)) => (rc, alpha, false),
+            Some((_, alpha, rc)) => (rc.mul(alpha), alpha, false),
             None => (Rgb::ZERO, 0.0, false),
         },
     }
@@ -363,14 +364,14 @@ fn glyph_with_index(
     // so the lit belts reach the dense glyphs without blowing out to white.
     let v = ((lum - 0.045) / 0.86).clamp(0.0, 1.0).powf(0.85) * (ramp.len() - 1) as f32;
     let mut index = v.round() as usize;
-    if let Some(prev) = prev {
-        if let Some(pc) = prev.get(cell) {
-            let pi = pc.gi as f32;
-            // Hysteresis: only move a glyph when the brightness really moved,
-            // and never carry a glyph across a solid/sky edge.
-            if solid && pc.solid && (v - pi).abs() < 1.05 {
-                index = pi as usize;
-            }
+    if let Some(prev) = prev
+        && let Some(pc) = prev.get(cell)
+    {
+        let pi = pc.gi as f32;
+        // Hysteresis: only move a glyph when the brightness really moved,
+        // and never carry a glyph across a solid/sky edge.
+        if solid && pc.solid && (v - pi).abs() < 1.05 {
+            index = pi as usize;
         }
     }
     let index = index.min(ramp.len() - 1);
@@ -650,14 +651,15 @@ fn oval(lat: f32, lon: f32, lat0: f32, lon0: f32, sy: f32, sx: f32) -> f32 {
 }
 
 #[inline]
-fn wrap_pi(mut a: f32) -> f32 {
-    while a > PI {
-        a -= 2.0 * PI;
+fn wrap_pi(a: f32) -> f32 {
+    let a = a % (2.0 * PI);
+    if a > PI {
+        a - 2.0 * PI
+    } else if a < -PI {
+        a + 2.0 * PI
+    } else {
+        a
     }
-    while a < -PI {
-        a += 2.0 * PI;
-    }
-    a
 }
 
 // ---------------------------------------------------------------------------

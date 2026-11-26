@@ -17,7 +17,8 @@
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, BufWriter, Write};
-use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -26,6 +27,7 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::{cursor, event, execute, terminal};
 
 mod color;
+mod config;
 mod scene;
 
 use scene::{CHARSETS, Params, V3};
@@ -87,9 +89,100 @@ impl Default for Options {
     }
 }
 
-fn parse_args() -> Result<Options, String> {
-    let mut o = Options::default();
-    let mut args = std::env::args().skip(1);
+fn finite_arg(value: String, name: &str) -> Result<f32, String> {
+    let number = value.parse::<f32>().map_err(|_| format!("bad {name}"))?;
+    if number.is_finite() {
+        Ok(number)
+    } else {
+        Err(format!("bad {name}: expected a finite number"))
+    }
+}
+
+fn apply_view(o: &mut Options, name: &str) -> Result<(), String> {
+    match name {
+        // straight-on postcard
+        "classic" => {
+            o.tilt_deg = 24.0;
+            o.azimuth_deg = 0.0;
+            o.roll_deg = 0.0;
+            o.distance = 14.0;
+            o.sun = V3::new(-0.45, 0.42, -0.79);
+        }
+        // rings sweeping diagonally across the frame
+        "dramatic" => {
+            o.tilt_deg = 27.0;
+            o.azimuth_deg = 26.0;
+            o.roll_deg = -14.0;
+            o.distance = 6.0;
+            o.sun = V3::new(-0.48, 0.44, -0.76);
+        }
+        // low, close and deep
+        "closeup" => {
+            o.tilt_deg = 16.0;
+            o.azimuth_deg = 18.0;
+            o.roll_deg = -8.0;
+            o.distance = 3.9;
+            o.sun = V3::new(-0.50, 0.40, -0.77);
+        }
+        // almost edge-on rings slicing the globe (default)
+        "edge" => {
+            o.tilt_deg = BASE_TILT_DEG;
+            o.azimuth_deg = BASE_AZIMUTH_DEG;
+            o.roll_deg = BASE_ROLL_DEG;
+            o.distance = CAMERA_DISTANCE;
+            o.sun = SUN;
+        }
+        other => return Err(format!("unknown view: {other}")),
+    }
+    Ok(())
+}
+
+fn parse_charset(value: &str) -> Result<usize, String> {
+    CHARSETS
+        .iter()
+        .position(|charset| charset.name == value)
+        .or_else(|| value.parse::<usize>().ok())
+        .filter(|index| *index < CHARSETS.len())
+        .ok_or_else(|| format!("unknown charset: {value}"))
+}
+
+fn apply_config(o: &mut Options, config: config::Config) -> Result<(), String> {
+    if let Some(view) = config.view.as_deref() {
+        apply_view(o, view)?;
+    }
+    if let Some(charset) = config.charset.as_deref() {
+        o.charset = parse_charset(charset)?;
+    }
+    if let Some(fps) = config.fps {
+        o.fps = fps;
+        o.fps_set = true;
+    }
+    if let Some(speed) = config.speed {
+        o.speed = speed;
+    }
+    if let Some(tilt) = config.tilt {
+        o.tilt_deg = tilt;
+    }
+    if let Some(azimuth) = config.azimuth {
+        o.azimuth_deg = azimuth;
+    }
+    if let Some(roll) = config.roll {
+        o.roll_deg = roll;
+    }
+    if let Some(distance) = config.distance {
+        o.distance = distance;
+    }
+    if let Some(zoom) = config.zoom {
+        o.zoom = zoom;
+    }
+    if let Some(color) = config.color.as_deref() {
+        o.color = ColorMode::parse(color).ok_or_else(|| format!("unknown color mode: {color}"))?;
+    }
+    Ok(())
+}
+
+fn parse_args(args: &[String], mut o: Options) -> Result<Options, String> {
+    let mut args = args.iter().cloned();
 
     while let Some(a) = args.next() {
         let (key, inline) = match a.split_once('=') {
@@ -118,74 +211,26 @@ fn parse_args() -> Result<Options, String> {
                 o.fps_set = true;
             }
             "--speed" => {
-                o.speed = next("--speed")?.parse().map_err(|_| "bad --speed")?;
-                o.speed = o.speed.clamp(0.05, 8.0);
+                o.speed = finite_arg(next("--speed")?, "--speed")?.clamp(0.05, 8.0);
             }
             "--tilt" => {
-                o.tilt_deg = next("--tilt")?.parse().map_err(|_| "bad --tilt")?;
-                o.tilt_deg = o.tilt_deg.clamp(-85.0, 85.0);
+                o.tilt_deg = finite_arg(next("--tilt")?, "--tilt")?.clamp(-85.0, 85.0);
             }
             "--azimuth" | "--angle" => {
-                o.azimuth_deg = next("--azimuth")?.parse().map_err(|_| "bad --azimuth")?;
-                o.azimuth_deg = o.azimuth_deg.clamp(-360.0, 360.0);
+                o.azimuth_deg = finite_arg(next("--azimuth")?, "--azimuth")?.clamp(-360.0, 360.0);
             }
-            "--view" => {
-                match next("--view")?.as_str() {
-                    // straight-on postcard
-                    "classic" => {
-                        o.tilt_deg = 24.0;
-                        o.azimuth_deg = 0.0;
-                        o.roll_deg = 0.0;
-                        o.distance = 14.0;
-                        o.sun = V3::new(-0.45, 0.42, -0.79);
-                    }
-                    // rings sweeping diagonally across the frame
-                    "dramatic" => {
-                        o.tilt_deg = 27.0;
-                        o.azimuth_deg = 26.0;
-                        o.roll_deg = -14.0;
-                        o.distance = 6.0;
-                        o.sun = V3::new(-0.48, 0.44, -0.76);
-                    }
-                    // low, close and deep
-                    "closeup" => {
-                        o.tilt_deg = 16.0;
-                        o.azimuth_deg = 18.0;
-                        o.roll_deg = -8.0;
-                        o.distance = 3.9;
-                        o.sun = V3::new(-0.50, 0.40, -0.77);
-                    }
-                    // almost edge-on rings slicing the globe (default)
-                    "edge" => {
-                        o.tilt_deg = BASE_TILT_DEG;
-                        o.azimuth_deg = BASE_AZIMUTH_DEG;
-                        o.roll_deg = BASE_ROLL_DEG;
-                        o.distance = CAMERA_DISTANCE;
-                        o.sun = SUN;
-                    }
-                    other => return Err(format!("unknown view: {other}")),
-                }
-            }
+            "--view" => apply_view(&mut o, &next("--view")?)?,
             "--roll" => {
-                o.roll_deg = next("--roll")?.parse().map_err(|_| "bad --roll")?;
-                o.roll_deg = o.roll_deg.clamp(-180.0, 180.0);
+                o.roll_deg = finite_arg(next("--roll")?, "--roll")?.clamp(-180.0, 180.0);
             }
             "--dist" => {
-                o.distance = next("--dist")?.parse().map_err(|_| "bad --dist")?;
-                o.distance = o.distance.clamp(3.6, 60.0);
+                o.distance = finite_arg(next("--dist")?, "--dist")?.clamp(3.6, 60.0);
             }
             "--zoom" => {
-                o.zoom = next("--zoom")?.parse().map_err(|_| "bad --zoom")?;
-                o.zoom = o.zoom.clamp(0.5, 3.0);
+                o.zoom = finite_arg(next("--zoom")?, "--zoom")?.clamp(0.5, 3.0);
             }
             "--charset" => {
-                let v = next("--charset")?;
-                o.charset = CHARSETS
-                    .iter()
-                    .position(|c| c.name == v)
-                    .or_else(|| v.parse::<usize>().ok())
-                    .filter(|i| *i < CHARSETS.len())
-                    .ok_or_else(|| format!("unknown charset: {v}"))?;
+                o.charset = parse_charset(&next("--charset")?)?;
             }
             "--screensaver" => o.screensaver = true,
             "--snapshot" => o.snapshot = Some(next("--snapshot")?),
@@ -198,7 +243,7 @@ fn parse_args() -> Result<Options, String> {
                 o.rows = o.rows.clamp(6, 400);
             }
             "--time" => {
-                o.time = next("--time")?.parse().map_err(|_| "bad --time")?;
+                o.time = finite_arg(next("--time")?, "--time")?;
             }
             "--ascii" => o.ascii = true,
             "--color" => {
@@ -213,6 +258,9 @@ fn parse_args() -> Result<Options, String> {
     // drift.  Pass --fps to override.
     if o.screensaver && !o.fps_set {
         o.fps = 10;
+    }
+    if o.ascii && o.snapshot.as_deref() != Some("-") {
+        return Err("--ascii requires --snapshot -".into());
     }
     Ok(o)
 }
@@ -283,11 +331,13 @@ struct TermGuard {
 impl TermGuard {
     fn enter(screensaver: bool) -> io::Result<Self> {
         terminal::enable_raw_mode()?;
+        let mut guard = Self { mouse: false };
         execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)?;
         if screensaver {
             let _ = execute!(io::stdout(), event::EnableMouseCapture);
+            guard.mouse = true;
         }
-        Ok(Self { mouse: screensaver })
+        Ok(guard)
     }
 }
 
@@ -531,8 +581,7 @@ fn run(opts: Options) -> io::Result<()> {
     let mut charset = opts.charset;
     let mut status: Option<(String, f32)> = None;
     let mut dims = (0usize, 0usize);
-    let mut prev: Option<Vec<scene::Cell>> = None;
-    let mut drawn: Option<Vec<scene::Cell>> = None;
+    let mut previous: Option<Vec<scene::Cell>> = None;
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -614,11 +663,10 @@ fn run(opts: Options) -> io::Result<()> {
             time: t,
             ramp: CHARSETS[charset].ramp,
         };
-        // Reuse the previous frame's glyphs as hysteresis, but only when the
-        // terminal geometry is unchanged.
-        let prev_ref = prev.as_deref().filter(|_| dims == (cols, rows));
-        let cells = scene::render(cols, rows, &p, prev_ref);
-        prev = Some(cells.clone());
+        if dims != (cols, rows) {
+            previous = None;
+        }
+        let cells = scene::render(cols, rows, &p, previous.as_deref());
 
         let mut s = String::with_capacity(cols * rows * 4 + 64);
         if dims != (cols, rows) {
@@ -626,7 +674,6 @@ fn run(opts: Options) -> io::Result<()> {
             // and make sure the cursor stays hidden after a window change.
             s.push_str("\x1b[2J");
             dims = (cols, rows);
-            drawn = None;
         }
         s.push_str("\x1b[?25l");
 
@@ -638,7 +685,7 @@ fn run(opts: Options) -> io::Result<()> {
             for i in 0..cols {
                 let n = j * cols + i;
                 let c = cells[n];
-                let changed = match drawn.as_ref() {
+                let changed = match previous.as_ref() {
                     None => true,
                     Some(old) => {
                         let o = old[n];
@@ -704,11 +751,11 @@ fn run(opts: Options) -> io::Result<()> {
 
         // The last row carries the fade-out status message, so repaint it
         // every frame: the message then disappears cleanly.
-        let mut sent = cells.clone();
+        let mut sent = cells;
         for i in 0..cols {
             sent[(rows - 1) * cols + i].ch = 0;
         }
-        drawn = Some(sent);
+        previous = Some(sent);
 
         s.push_str("\x1b[0m");
         out.write_all(s.as_bytes())?;
@@ -749,7 +796,10 @@ fn snapshot(opts: &Options) -> io::Result<()> {
             }
             s.push('\n');
         }
-        print!("{s}");
+        let stdout = io::stdout();
+        let mut out = BufWriter::new(stdout.lock());
+        out.write_all(s.as_bytes())?;
+        out.flush()?;
         return Ok(());
     }
 
@@ -829,7 +879,9 @@ fn idle_state_path() -> PathBuf {
 fn on_path(command: &str) -> bool {
     Command::new("sh")
         .arg("-c")
-        .arg(format!("command -v {command}"))
+        .arg("command -v -- \"$1\"")
+        .arg("sh")
+        .arg(command)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -838,7 +890,9 @@ fn on_path(command: &str) -> bool {
 fn login_which(command: &str) -> Option<String> {
     let out = Command::new("bash")
         .arg("-lc")
-        .arg(format!("command -v {command}"))
+        .arg("command -v -- \"$1\"")
+        .arg("bash")
+        .arg(command)
         .output()
         .ok()?;
     let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -849,15 +903,29 @@ fn login_which(command: &str) -> Option<String> {
     }
 }
 
-fn strip_block(text: &str) -> String {
+fn strip_block(text: &str) -> io::Result<String> {
     let mut out = String::with_capacity(text.len());
     let mut skip = false;
+    let mut found = false;
     for line in text.lines() {
         if line == PATH_BEGIN {
+            if skip || found {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "nested or duplicate saturn-art PATH block",
+                ));
+            }
             skip = true;
+            found = true;
             continue;
         }
         if line == PATH_END {
+            if !skip {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unmatched saturn-art PATH block end",
+                ));
+            }
             skip = false;
             continue;
         }
@@ -866,12 +934,22 @@ fn strip_block(text: &str) -> String {
             out.push('\n');
         }
     }
-    out
+    if skip {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unterminated saturn-art PATH block",
+        ));
+    }
+    Ok(out)
 }
 
 fn write_block(path: &Path, shim_dir: &Path) -> io::Result<()> {
-    let old = fs::read_to_string(path).unwrap_or_default();
-    let mut text = strip_block(&old);
+    let old = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    let mut text = strip_block(&old)?;
     while text.ends_with("\n\n") {
         text.pop();
     }
@@ -891,7 +969,7 @@ fn write_block(path: &Path, shim_dir: &Path) -> io::Result<()> {
     text.push('\n');
     text.push_str(PATH_END);
     text.push('\n');
-    fs::write(path, text)
+    write_text_atomic(path, &text)
 }
 
 /// Escape a value for use inside a double-quoted shell word.
@@ -907,11 +985,14 @@ fn shell_double_quote(value: &str) -> String {
 }
 
 fn clean_block(path: &Path) -> io::Result<()> {
-    if let Ok(old) = fs::read_to_string(path) {
-        let cleaned = strip_block(&old);
-        if cleaned != old {
-            fs::write(path, cleaned)?;
-        }
+    let old = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let cleaned = strip_block(&old)?;
+    if cleaned != old {
+        write_text_atomic(path, &cleaned)?;
     }
     Ok(())
 }
@@ -1039,14 +1120,15 @@ fn parse_duration(text: &str) -> Result<Option<u64>, String> {
         let n: u64 = digits
             .parse()
             .map_err(|_| "duration is too large".to_string())?;
-        total = total.saturating_add(n.saturating_mul(unit));
+        let seconds = n.checked_mul(unit).ok_or("duration is too large")?;
+        total = total.checked_add(seconds).ok_or("duration is too large")?;
         digits.clear();
     }
     if !digits.is_empty() {
         let n: u64 = digits
             .parse()
             .map_err(|_| "duration is too large".to_string())?;
-        total = total.saturating_add(n);
+        total = total.checked_add(n).ok_or("duration is too large")?;
     }
     Ok(Some(total))
 }
@@ -1082,24 +1164,68 @@ fn load_shell_config_for_write() -> io::Result<serde_json::Value> {
     match fs::read_to_string(&path) {
         Ok(text) if !text.trim().is_empty() => serde_json::from_str(&text)
             .map_err(|e| io::Error::other(format!("could not parse {}: {e}", path.display()))),
-        _ => Ok(read_shell_config().unwrap_or_else(|| serde_json::json!({ "version": 1 }))),
+        Ok(_) => Ok(read_shell_config().unwrap_or_else(|| serde_json::json!({ "version": 1 }))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(read_shell_config().unwrap_or_else(|| serde_json::json!({ "version": 1 })))
+        }
+        Err(error) => Err(error),
     }
 }
 
 fn write_text_atomic(path: &Path, text: &str) -> io::Result<()> {
-    let dir = path.parent().unwrap_or(Path::new("."));
+    let destination = match fs::canonicalize(path) {
+        Ok(path) => path,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => path.to_path_buf(),
+        Err(error) => return Err(error),
+    };
+    let dir = destination.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir)?;
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "config".into());
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    fs::write(&tmp, text)?;
-    if let Err(e) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
+    let permissions = match fs::metadata(&destination) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+
+    for attempt in 0..100 {
+        let mut name = std::ffi::OsString::from(".");
+        name.push(
+            destination
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("config")),
+        );
+        name.push(format!(".{}.{}.tmp", std::process::id(), attempt));
+        let tmp = dir.join(name);
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = match options.open(&tmp) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let result = (|| {
+            if let Some(permissions) = permissions.clone() {
+                file.set_permissions(permissions)?;
+            }
+            file.write_all(text.as_bytes())?;
+            file.sync_all()
+        })();
+        drop(file);
+        if let Err(error) = result {
+            let _ = fs::remove_file(&tmp);
+            return Err(error);
+        }
+        if let Err(error) = fs::rename(&tmp, &destination) {
+            let _ = fs::remove_file(&tmp);
+            return Err(error);
+        }
+        return Ok(());
     }
-    Ok(())
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a temporary config file",
+    ))
 }
 
 fn reload_shell() {
@@ -1130,13 +1256,32 @@ fn save_idle_snapshot() -> io::Result<()> {
     }
 
     let config_path = user_shell_config();
-    let config = fs::read_to_string(&config_path).ok();
-    let idle = config
-        .as_deref()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
-        .and_then(|value| value.get("idle").cloned());
+    let config = match fs::read_to_string(&config_path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let idle = match config.as_deref() {
+        Some(text) if text.trim().is_empty() => None,
+        Some(text) => {
+            let value: serde_json::Value = serde_json::from_str(text).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("could not parse {}: {error}", config_path.display()),
+                )
+            })?;
+            value.get("idle").cloned()
+        }
+        None => None,
+    };
+    if idle.as_ref().is_some_and(|idle| !idle.is_object()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("`idle` in {} is not an object", config_path.display()),
+        ));
+    }
     let snapshot = serde_json::json!({
-        "config_existed": config_path.exists(),
+        "config_existed": config.is_some(),
         "idle": idle,
     });
     let text = serde_json::to_string_pretty(&snapshot).map_err(io::Error::other)?;
@@ -1155,6 +1300,9 @@ fn apply_snapshot(
             object.remove("idle");
         }
         Some(idle) => {
+            if !idle.is_object() {
+                return Err("saved idle settings are not an object".into());
+            }
             object.insert("idle".to_string(), idle.clone());
         }
     }
@@ -1163,8 +1311,10 @@ fn apply_snapshot(
 
 fn restore_idle_snapshot() -> io::Result<()> {
     let path = idle_state_path();
-    let Ok(text) = fs::read_to_string(&path) else {
-        return Ok(());
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
     };
     let snapshot: serde_json::Value = serde_json::from_str(&text)
         .map_err(|e| io::Error::other(format!("could not parse {}: {e}", path.display())))?;
@@ -1184,14 +1334,22 @@ fn restore_idle_snapshot() -> io::Result<()> {
             .as_object()
             .is_some_and(|object| object.contains_key("idle"))
     {
-        let _ = fs::remove_file(&config_path);
+        match fs::remove_file(&config_path) {
+            Ok(()) => reload_shell(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
     } else {
         let text = serde_json::to_string_pretty(&config).map_err(io::Error::other)?;
         write_text_atomic(&config_path, &(text + "\n"))?;
         reload_shell();
     }
 
-    let _ = fs::remove_file(&path);
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
     let _ = fs::remove_dir(state_home().join("saturn-art"));
     Ok(())
 }
@@ -1336,7 +1494,8 @@ fn screensaver_install() -> io::Result<()> {
     let shim = shim_path();
     let dir = shim.parent().unwrap_or(Path::new(".")).to_path_buf();
     fs::create_dir_all(&dir)?;
-    fs::write(&shim, SCREENSAVER_LAUNCHER)?;
+    write_text_atomic(&shim, SCREENSAVER_LAUNCHER)?;
+    #[cfg(unix)]
     fs::set_permissions(&shim, fs::Permissions::from_mode(0o755))?;
 
     // Login shells are what Omarchy's idle service and menu invoke the
@@ -1363,7 +1522,11 @@ fn screensaver_remove() -> io::Result<()> {
     let had_snapshot = idle_state_path().exists();
 
     let shim = shim_path();
-    let _ = fs::remove_file(&shim);
+    match fs::remove_file(&shim) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
     if let Some(dir) = shim.parent() {
         let _ = fs::remove_dir(dir);
     }
@@ -1504,7 +1667,20 @@ launcher through a login shell."
 }
 
 fn screensaver_command(args: &[String]) -> i32 {
-    match args.first().map(|s| s.as_str()).unwrap_or("status") {
+    let action = args.first().map(|s| s.as_str()).unwrap_or("status");
+    let valid_arity = match action {
+        "on" | "enable" | "install" | "off" | "disable" | "uninstall" | "start" | "show"
+        | "test" | "help" | "-h" | "--help" => args.len() == 1,
+        "status" => args.len() <= 1,
+        "delay" | "timeout" | "lock" => args.len() <= 2,
+        _ => true,
+    };
+    if !valid_arity {
+        eprintln!("saturn-art: wrong number of arguments for screensaver {action}");
+        eprintln!("try `saturn-art screensaver --help`");
+        return 2;
+    }
+    match action {
         "on" | "enable" | "install" => match screensaver_install() {
             Ok(()) => 0,
             Err(e) => {
@@ -1550,7 +1726,24 @@ fn main() {
         std::process::exit(screensaver_command(&raw[1..]));
     }
 
-    let opts = match parse_args() {
+    let asks_for_help = raw
+        .iter()
+        .take_while(|argument| argument.as_str() != "--")
+        .any(|argument| matches!(argument.as_str(), "-h" | "--help" | "-V" | "--version"));
+    let cfg = if asks_for_help {
+        config::Config::default()
+    } else {
+        config::load().unwrap_or_else(|error| {
+            eprintln!("saturn-art: {error}");
+            std::process::exit(2);
+        })
+    };
+    let mut initial = Options::default();
+    if let Err(error) = apply_config(&mut initial, cfg) {
+        eprintln!("saturn-art: {error}");
+        std::process::exit(2);
+    }
+    let opts = match parse_args(&raw, initial) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("saturn-art: {e}\n\ntry `saturn-art --help`");
@@ -1673,5 +1866,145 @@ mod tests {
         apply_snapshot(&mut config, &serde_json::json!({ "idle": null })).unwrap();
         assert!(config.get("idle").is_none());
         assert_eq!(config["version"], 1);
+    }
+
+    fn arguments(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn rejects_non_finite_numeric_arguments() {
+        for option in [
+            "--speed",
+            "--tilt",
+            "--azimuth",
+            "--roll",
+            "--dist",
+            "--zoom",
+            "--time",
+        ] {
+            for value in ["NaN", "inf", "-inf"] {
+                let result = parse_args(&arguments(&[option, value]), Options::default());
+                assert!(result.is_err(), "{option} accepted {value}");
+            }
+        }
+        assert!(
+            parse_args(
+                &arguments(&["--time", &f32::MAX.to_string()]),
+                Options::default()
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn ascii_snapshots_require_stdout() {
+        assert!(parse_args(&arguments(&["--ascii"]), Options::default()).is_err());
+        assert!(
+            parse_args(
+                &arguments(&["--snapshot", "out.ppm", "--ascii"]),
+                Options::default()
+            )
+            .is_err()
+        );
+        assert!(
+            parse_args(
+                &arguments(&["--snapshot", "-", "--ascii"]),
+                Options::default()
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_duration_overflow() {
+        assert!(parse_duration(&format!("{}h", u64::MAX)).is_err());
+        assert!(parse_duration(&format!("{}s1", u64::MAX)).is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_managed_path_blocks() {
+        let valid = format!("before\n{PATH_BEGIN}\nexport PATH=x\n{PATH_END}\nafter\n");
+        assert_eq!(strip_block(&valid).unwrap(), "before\nafter\n");
+        assert!(strip_block(&format!("before\n{PATH_BEGIN}\nlost")).is_err());
+        assert!(strip_block(&format!("before\n{PATH_END}\nafter")).is_err());
+        assert!(strip_block(&format!("{PATH_BEGIN}\n{PATH_BEGIN}\n{PATH_END}")).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_idle_snapshot_types() {
+        let mut config = serde_json::json!({ "version": 1 });
+        assert!(apply_snapshot(&mut config, &serde_json::json!({ "idle": 42 })).is_err());
+        assert!(config.get("idle").is_none());
+    }
+
+    #[test]
+    fn rejects_extra_screensaver_arguments_before_acting() {
+        for values in [
+            &["status", "extra"][..],
+            &["on", "extra"][..],
+            &["delay", "1m", "extra"][..],
+        ] {
+            assert_eq!(screensaver_command(&arguments(values)), 2);
+        }
+    }
+
+    fn test_directory(name: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("saturn-art-{name}-{}-{unique}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn atomic_write_replaces_content_and_preserves_permissions() {
+        let directory = test_directory("atomic");
+        let path = directory.join("config");
+        fs::write(&path, "old").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+
+        write_text_atomic(&path, "new").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_preserves_symlinks_and_ignores_stale_temp_links() {
+        use std::os::unix::fs::symlink;
+
+        let directory = test_directory("atomic-links");
+        let target = directory.join("target");
+        let path = directory.join("config");
+        let victim = directory.join("victim");
+        fs::write(&target, "old").unwrap();
+        fs::write(&victim, "safe").unwrap();
+        symlink(&target, &path).unwrap();
+        symlink(
+            &victim,
+            directory.join(format!(".config.{}.0.tmp", std::process::id())),
+        )
+        .unwrap();
+
+        write_text_atomic(&path, "new").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "safe");
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 }

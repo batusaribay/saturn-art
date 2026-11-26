@@ -84,38 +84,21 @@ saturn-art --snapshot - --ascii --cols 100 --rows 40
 
 ## Notes
 
-Views: `edge` is rings tipped up to the right with a bright globe; `classic` is
-the straight-on postcard; `dramatic` is angled and rolled; `closeup` is a low
-camera with strong perspective. Keys: `q` or `Esc` quits, `space` pauses, `+`
-and `-` change speed, `c` cycles the glyph ramp, and `r` resets time and speed.
+Keys: `q` or `Esc` quits, `space` pauses, `+` and `-` change speed, `c` cycles
+the glyph ramp, and `r` resets time and speed. `--snapshot -` writes a PPM to
+stdout unless `--ascii` is used. The screensaver commands manage Omarchy's idle
+settings in `~/.config/omarchy/shell.json`. With the lock disabled, Saturn stays
+on screen after waking from suspend until you press a key or click.
 
-On Omarchy, `saturn-art screensaver on` installs a launcher shim and puts its
-directory first in the login PATH. The idle service and the Screensaver menu
-then open one fullscreen instance per monitor. `screensaver off` removes the
-shim and restores the timers saved when it was installed. `screensaver delay`
-and `screensaver timeout` accept `90`, `90s`, `5m`, `1h30m`, `never`, or
-`default`; both are stored in `~/.config/omarchy/shell.json`, and
-`timeout never` disables the lock screen entirely.
+## Config
 
-The default spin is about 21 seconds per rotation. Saturn really takes 10.7
-hours, so this is a screen-saver pace with the same direction and differential
-ring motion. `--speed` goes from 0.05x to 8x. Ring thickness is a physical lie:
-the real rings are tens of metres thick and are drawn here as a zero-thickness
-sheet.
-
-Rendering scales with the terminal. A 140x45 terminal is comfortable at 30 fps;
-large terminals drop to fewer samples per cell. The scene assumes a dark
-background. `--snapshot -` writes a PPM to stdout, or plain text with `--ascii`,
-which makes it usable from scripts and for wallpapers.
-
-Color uses truecolor when the terminal reports it, falls back to 256 colors and
-then 16 colors, and runs without color with `--color never`, `NO_COLOR`,
-`CLICOLOR=0`, or `TERM=dumb`. PPM snapshots always keep full color because they
-are files, not terminal output.
+Reads `~/.config/saturn-art/config.toml` if present. Flags override the file;
+defaults apply otherwise.
 
 ## Install
 
-**Requirements:** Rust 1.88+, `git`, and a terminal with 24-bit colour.
+**Requirements:** Rust 1.88+, `git`, and a terminal with 24-bit colour. The
+screensaver commands require Omarchy.
 
 ```bash
 cargo install --git https://github.com/batusaribay/saturn-art.git --locked

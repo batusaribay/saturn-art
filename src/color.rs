@@ -54,9 +54,9 @@ impl Rgb {
     pub fn over(self, src: Rgb, alpha: f32) -> Self {
         let a = alpha.clamp(0.0, 1.0);
         Self::new(
-            src.r + self.r * (1.0 - a),
-            src.g + self.g * (1.0 - a),
-            src.b + self.b * (1.0 - a),
+            src.r * a + self.r * (1.0 - a),
+            src.g * a + self.g * (1.0 - a),
+            src.b * a + self.b * (1.0 - a),
         )
     }
 
@@ -117,4 +117,21 @@ pub fn from_hex(h: u32) -> Rgb {
     let g = ((h >> 8) & 0xff) as f32 / 255.0;
     let b = (h & 0xff) as f32 / 255.0;
     Rgb::new(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn composites_source_and_destination_by_alpha() {
+        let background = Rgb::new(0.2, 0.4, 0.6);
+        let source = Rgb::new(0.8, 0.2, 0.0);
+        let result = background.over(source, 0.25);
+        assert!((result.r - 0.35).abs() < 1e-6);
+        assert!((result.g - 0.35).abs() < 1e-6);
+        assert!((result.b - 0.45).abs() < 1e-6);
+        assert_eq!(background.over(source, 0.0).r, background.r);
+        assert_eq!(background.over(source, 1.0).r, source.r);
+    }
 }
