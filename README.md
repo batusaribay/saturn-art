@@ -92,8 +92,20 @@ on screen after waking from suspend until you press a key or click.
 
 ## Config
 
-Reads `~/.config/saturn-art/config.toml` if present. Flags override the file;
-defaults apply otherwise.
+Optional. Reads `~/.config/saturn-art/config.toml` if present. Flags override the file; defaults apply otherwise.
+
+```toml
+view = "edge"
+charset = "classic"
+fps = 30
+speed = 1.0
+tilt = 15.0
+azimuth = 10.0
+roll = 12.0
+distance = 6.5
+zoom = 1.0
+color = "auto"
+```
 
 ## Install
 
